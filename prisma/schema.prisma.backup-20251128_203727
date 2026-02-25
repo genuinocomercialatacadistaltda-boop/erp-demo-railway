@@ -1,0 +1,2573 @@
+generator client {
+    provider = "prisma-client-js"
+    binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
+    output = "/home/ubuntu/espetos_genuino/nextjs_space/node_modules/.prisma/client"
+}
+
+datasource db {
+    provider = "postgresql"
+    url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                String  @id
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  User              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model AutomaticNotificationConfig {
+  id          String               @id
+  name        String
+  description String?
+  eventType   String
+  daysOffset  Int                  @default(0)
+  isActive    Boolean              @default(true)
+  title       String
+  message     String
+  targetRole  UserRole
+  category    NotificationCategory @default(GENERAL)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime
+}
+
+model Boleto {
+  id                String       @id
+  boletoNumber      String       @unique
+  customerId        String
+  orderId           String?
+  amount            Float
+  dueDate           DateTime
+  status            BoletoStatus @default(PENDING)
+  paidDate          DateTime?
+  paidBy            String?
+  notes             String?
+  isInstallment     Boolean      @default(false)
+  installmentNumber Int?
+  totalInstallments Int?
+  pixQrCode         String?
+  pixQrCodeBase64   String?
+  pixPaymentId      String?
+  boletoUrl         String?
+  fineAmount        Float?
+  interestAmount    Float?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime
+  barcodeNumber     String?
+  digitableLine     String?
+  Customer          Customer     @relation(fields: [customerId], references: [id])
+  Order             Order?       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  Receivable        Receivable[]
+}
+
+model Commission {
+  id          String            @id
+  sellerId    String
+  orderId     String?
+  amount      Float
+  description String
+  status      CommissionStatus  @default(PENDING)
+  releaseDate DateTime?
+  releasedBy  String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime
+  closureId   String?
+  Seller      Seller            @relation(fields: [sellerId], references: [id])
+  Closure     CommissionClosure? @relation(fields: [closureId], references: [id])
+}
+
+model CommissionClosure {
+  id                String             @id
+  sellerId          String
+  referenceMonth    String             // Formato: "2025-11" (ano-mês)
+  totalAmount       Float              // Total de comissões do período
+  status            ClosureStatus      @default(PENDING)
+  closedAt          DateTime           @default(now())
+  closedBy          String             // ID do admin que fechou
+  paidAt            DateTime?          // Data do pagamento
+  paidBy            String?            // ID do admin que pagou
+  paymentMethod     String?            // Forma de pagamento (PIX, TED, etc)
+  notes             String?            // Observações
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  Seller            Seller             @relation(fields: [sellerId], references: [id])
+  Commissions       Commission[]       // Comissões incluídas neste fechamento
+  
+  @@unique([sellerId, referenceMonth])
+}
+
+enum ClosureStatus {
+  PENDING   // Fechado mas ainda não pago
+  PAID      // Pago
+  CANCELLED // Cancelado
+}
+
+model Coupon {
+  id                    String             @id
+  code                  String             @unique
+  description           String?
+  discountType          DiscountType
+  discountValue         Float
+  minOrderValue         Float?
+  maxDiscount           Float?
+  validFrom             DateTime           @default(now())
+  validUntil            DateTime?
+  isActive              Boolean            @default(true)
+  usageLimit            Int?
+  usageCount            Int                @default(0)
+  isOneTimePerCustomer  Boolean            @default(false)
+  
+  // Filtros de público-alvo
+  targetAllCustomers    Boolean            @default(false)
+  targetInactiveDays    Int?
+  targetSpecificProducts String[]
+  targetMinPurchaseCount Int?
+  targetMaxPurchaseCount Int?
+  targetCities          String[]
+  targetCustomerIds     String[]
+  
+  // Filtros estratégicos avançados
+  targetDecreasingVolume Boolean           @default(false)
+  targetVolumeDecreasePercent Float?
+  targetProductDiversityChange Boolean     @default(false)
+  targetPreviousProducts String[]
+  targetCurrentProducts  String[]
+  
+  createdBy             String?
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime
+  
+  CouponUsage           CouponUsage[]
+  Order                 Order[]
+}
+
+model CouponUsage {
+  id         String   @id
+  couponId   String
+  customerId String
+  orderId    String?
+  usedAt     DateTime @default(now())
+  
+  Coupon     Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  Customer   Customer @relation(fields: [customerId], references: [id])
+  
+  @@unique([couponId, customerId, orderId])
+}
+
+model Customer {
+  id                 String            @id
+  name               String
+  email              String?           @unique
+  phone              String
+  cpfCnpj            String?
+  city               String
+  address            String?
+  creditLimit        Float             @default(0)
+  availableCredit    Float             @default(0)
+  customDiscount     Float             @default(0)
+  paymentTerms       Int               @default(30)
+  isActive           Boolean           @default(true)
+  sellerId           String?
+  allowInstallments  Boolean           @default(false)
+  installmentOptions String?
+  useCustomCatalog   Boolean           @default(true)
+  customerType       CustomerType      @default(NORMAL)
+  allowLaterPayment  Boolean           @default(true)
+  birthDate          DateTime?         // Data de nascimento (opcional) para cupons de aniversário
+  
+  // Sistema de Pontos/Recompensas
+  pointsBalance      Float             @default(0)
+  pointsMultiplier   Float             @default(1.0)
+  totalPointsEarned  Float             @default(0)
+  totalPointsRedeemed Float            @default(0)
+  
+  // Sistema de Indicações
+  referredBy                String?           // ID do cliente que indicou este cliente
+  referralBonusReceived     Boolean           @default(false) // Se já recebeu o bônus de primeira compra
+  ReferredByCustomer        Customer?         @relation("CustomerReferrals", fields: [referredBy], references: [id], onDelete: SetNull)
+  ReferredCustomers  Customer[]        @relation("CustomerReferrals")
+  ReferralsMade      Referral[]        @relation("ReferrerRelation")
+  ReferralsReceived  Referral[]        @relation("ReferredRelation")
+  
+  // Liberação Manual de Bloqueio
+  manuallyUnblocked  Boolean           @default(false) // Se foi liberado manualmente (comprovante de pagamento)
+  unblockedAt        DateTime?         // Quando foi liberado
+  unblockedBy        String?           // ID do admin que liberou
+  
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  Boleto             Boleto[]
+  Seller             Seller?           @relation(fields: [sellerId], references: [id])
+  CustomerProduct     CustomerProduct[]
+  CustomerRawMaterial CustomerRawMaterial[]
+  Order               Order[]
+  User               User?
+  CouponUsage        CouponUsage[]
+  PointTransaction   PointTransaction[]
+  Redemption         Redemption[]
+  Receivable         Receivable[]
+  Purchase           Purchase[]
+  
+  // Módulo de Gestão do Cliente
+  ManagementConfig        ClientManagementConfig?
+  ClientBankAccounts      ClientBankAccount[]
+  ClientExpenses          ClientExpense[]
+  ClientIncomes           ClientIncome[]
+  ClientProducts          ClientProduct[]
+  ClientInventories       ClientInventory[]
+  ClientInventoryMovements ClientInventoryMovement[]
+  ClientTables            ClientTable[]
+  ClientTableItems        ClientTableItem[]
+  ClientSales             ClientSale[]
+  ClientSaleItems         ClientSaleItem[]
+  WasteRecords            WasteRecord[]
+  ClientTransactions      ClientTransaction[]
+  ClientSuppliers         ClientSupplier[]
+  ClientCustomers         ClientCustomer[]
+  CardTransactions        CardTransaction[]
+  
+  // Módulo de Precificação do Cliente
+  ClientRecipes                   ClientRecipe[]
+  ClientRecipeIngredients         ClientRecipeIngredient[]
+  ClientProductionSupplies        ClientProductionSupply[]
+  ClientProductionSupplyGlobals   ClientProductionSupplyGlobal[]
+}
+
+model CustomerProduct {
+  id          String   @id
+  customerId  String
+  productId   String
+  customPrice Float?
+  isVisible   Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+  Customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, productId])
+}
+
+model CustomerRawMaterial {
+  id            String      @id
+  customerId    String
+  rawMaterialId String
+  customPrice   Float?
+  isVisible     Boolean     @default(true)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime
+  Customer      Customer    @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  RawMaterial   RawMaterial @relation(fields: [rawMaterialId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, rawMaterialId])
+}
+
+model Notification {
+  id           String                   @id
+  title        String
+  message      String
+  type         NotificationType         @default(COMMUNICATION)
+  category     NotificationCategory     @default(GENERAL)
+  deliveryMode NotificationDeliveryMode @default(AUTOMATIC)
+  targetRole   UserRole?
+  targetUserId String?
+  isRead       Boolean                  @default(false)
+  readAt       DateTime?
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @default(now())
+
+  @@index([createdAt])
+  @@index([targetRole, targetUserId, isRead])
+}
+
+model Order {
+  id                     String         @id
+  orderNumber            String         @unique
+  customerId             String?
+  userId                 String?
+  sellerId               String?
+  customerName           String
+  customerPhone          String?
+  customerEmail          String?
+  casualCustomerName     String?        // Nome do cliente casual (para encomendas sem cadastro completo)
+  address                String?
+  city                   String?
+  orderType              OrderType
+  deliveryType           DeliveryType
+  deliveryDate           DateTime?
+  deliveryTime           String?
+  paymentMethod          PaymentMethod
+  secondaryPaymentMethod PaymentMethod?
+  subtotal               Float
+  discount               Float          @default(0)
+  discountPercent        Float          @default(0)
+  couponId               String?
+  couponCode             String?
+  couponDiscount         Float          @default(0)
+  cardFee                Float          @default(0)
+  total                  Float
+  primaryPaymentAmount   Float?
+  secondaryPaymentAmount Float?
+  paidAmount             Float          @default(0) // Valor total já pago (NOVO)
+  paymentStatus          PaymentStatus  @default(UNPAID) // Status do pagamento (NOVO)
+  status                 OrderStatus    @default(PENDING)
+  deliveryOrder          Int?           // Ordem de entrega na rota (definida pelo entregador)
+  volumes                Int            @default(1) // Quantidade de volumes/caixas do pedido
+  notes                  String?
+  createdByUserId        String?
+  createdByRole          String?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime
+  Boleto                 Boleto[]
+  Customer               Customer?      @relation(fields: [customerId], references: [id])
+  Seller                 Seller?        @relation(fields: [sellerId], references: [id])
+  User                   User?          @relation(fields: [userId], references: [id])
+  Coupon                 Coupon?        @relation(fields: [couponId], references: [id])
+  OrderItem              OrderItem[]
+  Receivable             Receivable[]
+  Payment                Payment[]      // Relação com pagamentos (NOVO)
+  FiscalInvoice          FiscalInvoice[] // Relação com notas fiscais
+  CardTransactions       CardTransaction[]
+}
+
+model OrderItem {
+  id        String   @id
+  orderId   String
+  productId String
+  quantity  Int
+  unitPrice Float
+  total     Float
+  isGift    Boolean  @default(false)
+  isChecked Boolean  @default(false) // Campo para checklist do entregador
+  createdAt DateTime @default(now())
+  Order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  Product   Product  @relation(fields: [productId], references: [id])
+}
+
+model Product {
+  id                  String                  @id
+  name                String
+  description         String
+  imageUrl            String
+  weight              String
+  priceWholesale      Float
+  priceRetail         Float
+  isActive            Boolean                 @default(true)
+  category            String                  @default("Espetos")
+  availableIn         String                  @default("BOTH")
+  quantityIncrement   Int                     @default(1)
+  soldByWeight        Boolean                 @default(false) // Indica se é vendido por peso (kg)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime
+  CustomerProduct     CustomerProduct[]
+  OrderItem           OrderItem[]
+  ProductProfitability ProductProfitability[]
+  Recipe              Recipe?              // Receita para cálculo de custo
+  PriceHistory        PriceHistory[]       // Histórico de mudanças de preço
+}
+
+model Seller {
+  id                  String                 @id
+  name                String
+  email               String                 @unique
+  phone               String
+  cpf                 String                 @unique
+  isActive            Boolean                @default(true)
+  commissionRate      Float                  @default(1.0)
+  maxDiscountRate     Float                  @default(10.0)
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime
+  Commission          Commission[]
+  CommissionClosures  CommissionClosure[]
+  Customer            Customer[]
+  Order               Order[]
+  User                User?
+  SellerProfitability SellerProfitability[]
+  Employee            Employee[]             // Funcionários vinculados
+}
+
+model Session {
+  id           String   @id
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  User         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id
+  name          String?
+  email         String    @unique
+  password      String?
+  emailVerified DateTime?
+  image         String?
+  userType      UserType  @default(CUSTOMER)
+  customerId    String?   @unique
+  sellerId      String?   @unique
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime
+  Account       Account[]
+  Order         Order[]
+  Session       Session[]
+  Customer      Customer? @relation(fields: [customerId], references: [id])
+  Seller        Seller?   @relation(fields: [sellerId], references: [id])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ================ SISTEMA DE PONTOS E RECOMPENSAS ================
+
+model RewardConfig {
+  id                    String   @id @default(cuid())
+  pointsPerReal         Float    @default(1.0)  // Quantos pontos por R$ gasto
+  isActive              Boolean  @default(true)
+  updatedBy             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model Prize {
+  id                String       @id @default(cuid())
+  name              String
+  description       String?
+  imageUrl          String?
+  pointsCost        Int          // Quantos pontos necessários
+  stockQuantity     Int?         // Quantidade disponível (null = ilimitado)
+  isActive          Boolean      @default(true)
+  category          String?
+  displayOrder      Int          @default(0)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  
+  Redemption        Redemption[]
+}
+
+model PointTransaction {
+  id                String              @id @default(cuid())
+  customerId        String
+  orderId           String?
+  type              PointTransactionType
+  points            Float               // Pode ser positivo (ganho) ou negativo (resgate)
+  multiplierApplied Float               @default(1.0)
+  orderAmount       Float?              // Valor da compra que gerou os pontos
+  description       String?
+  reason            String?             // Motivo da transação (ex: "Presente de Aniversário", "Bônus", etc)
+  createdAt         DateTime            @default(now())
+  
+  Customer          Customer            @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  @@index([customerId])
+  @@index([createdAt])
+}
+
+model Redemption {
+  id                String            @id @default(cuid())
+  customerId        String
+  prizeId           String
+  pointsUsed        Int
+  status            RedemptionStatus  @default(PENDING)
+  requestedAt       DateTime          @default(now())
+  processedAt       DateTime?
+  processedBy       String?
+  notes             String?
+  rejectionReason   String?
+  
+  Customer          Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Prize             Prize             @relation(fields: [prizeId], references: [id], onDelete: Restrict)
+  
+  @@index([customerId])
+  @@index([status])
+  @@index([requestedAt])
+}
+
+// ================ SISTEMA DE INDICAÇÕES ================
+
+model Referral {
+  id                    String            @id @default(cuid())
+  referrerId            String            // Cliente que indicou
+  referredId            String            // Cliente que foi indicado
+  referralCode          String            // Código de indicação usado
+  status                ReferralStatus    @default(PENDING)
+  bonusPoints           Float             @default(0)  // Pontos ganhos pelo indicador
+  bonusAwarded          Boolean           @default(false)
+  bonusAwardedAt        DateTime?
+  firstOrderId          String?           // ID do primeiro pedido do indicado
+  firstOrderCompletedAt DateTime?
+  notes                 String?
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+  
+  Referrer              Customer          @relation("ReferrerRelation", fields: [referrerId], references: [id], onDelete: Cascade)
+  Referred              Customer          @relation("ReferredRelation", fields: [referredId], references: [id], onDelete: Cascade)
+  
+  @@index([referrerId])
+  @@index([referredId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ReferralConfig {
+  id                          String    @id @default(cuid())
+  isActive                    Boolean   @default(true)
+  bonusPointsPerReferral      Float     @default(100)  // Pontos ganhos por indicação
+  requireFirstOrder           Boolean   @default(true) // Se requer que o indicado faça uma compra
+  minimumOrderAmount          Float?    // Valor mínimo do pedido para ganhar bônus
+  bonusForReferred            Float     @default(0)    // Pontos de bônus para o indicado
+  maxReferralsPerCustomer     Int?      // Limite de indicações por cliente
+  expirationDays              Int?      // Dias para o indicado fazer a primeira compra
+  createdAt                   DateTime  @default(now())
+  updatedAt                   DateTime  @updatedAt
+}
+
+// ================ FIM SISTEMA DE INDICAÇÕES ================
+
+// ================ FIM SISTEMA DE PONTOS ================
+
+// ================ SISTEMA FINANCEIRO ================
+
+model BankAccount {
+  id                String               @id @default(cuid())
+  name              String               // Nome da conta (ex: "Itaú", "Mercado Pago", "Cora", "Caixa")
+  accountType       String               // Tipo: CHECKING, SAVINGS, CASH, DIGITAL_WALLET
+  bankName          String?              // Nome do banco
+  accountNumber     String?              // Número da conta
+  agency            String?              // Agência
+  balance           Float                @default(0)
+  isActive          Boolean              @default(true)
+  description       String?
+  color             String?              // Cor para identificação visual
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  
+  Transaction       Transaction[]
+  Expense           Expense[]
+  Receivable        Receivable[]
+  Reconciliation    BankReconciliation[]
+  BankStatement     BankStatement[]
+  Purchase          Purchase[]
+  CardTransactions  CardTransaction[]
+}
+
+model ExpenseCategory {
+  id                String              @id @default(cuid())
+  name              String              @unique
+  description       String?
+  color             String?             // Cor para o gráfico de pizza
+  icon              String?             // Ícone opcional
+  isActive          Boolean             @default(true)
+  displayOrder      Int                 @default(0)
+  expenseType       ExpenseType         @default(OTHER) // Tipo principal da despesa (OPERATIONAL, PRODUCTS, RAW_MATERIALS, OTHER)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  Expense           Expense[]
+  Budget            Budget[]
+  CreditCardExpense CreditCardExpense[]
+  RawMaterial       RawMaterial[]
+}
+
+model Expense {
+  id                String          @id @default(cuid())
+  description       String
+  amount            Float
+  categoryId        String
+  bankAccountId     String?
+  supplierId        String?         // ID do fornecedor (FASE 2)
+  supplierName      String?         // Nome do fornecedor (manter para retrocompatibilidade)
+  supplierDocument  String?         // CPF/CNPJ do fornecedor (manter para retrocompatibilidade)
+  competenceDate    DateTime?       // DATA DE COMPETÊNCIA (quando a despesa ocorreu/competiu) - Regime de Competência
+  dueDate           DateTime        // DATA DE VENCIMENTO (quando a despesa deve ser paga)
+  paymentDate       DateTime?       // DATA DE PAGAMENTO (quando a despesa foi efetivamente paga)
+  status            ExpenseStatus   @default(PENDING)
+  expenseType       ExpenseType     @default(OTHER) // Tipo de despesa
+  paymentMethod     String?
+  notes             String?
+  attachmentUrl     String?         // URL do arquivo anexado (nota fiscal/boleto)
+  attachmentName    String?         // Nome do arquivo
+  referenceNumber   String?         // Número da nota fiscal ou boleto
+  recurringType     String?         // MONTHLY, YEARLY, etc.
+  recurringParentId String?         // Se for despesa recorrente
+  feeAmount         Float?          // Taxa (ex: taxa de boleto)
+  createdBy         String?
+  paidBy            String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  Category          ExpenseCategory @relation(fields: [categoryId], references: [id])
+  BankAccount       BankAccount?    @relation(fields: [bankAccountId], references: [id])
+  Supplier          Supplier?       @relation(fields: [supplierId], references: [id])
+  Purchase          Purchase?       // Compra vinculada (se for despesa de compra)
+  
+  @@index([competenceDate])
+  @@index([dueDate])
+  @@index([status])
+  @@index([categoryId])
+  @@index([expenseType])
+}
+
+model Transaction {
+  id                String              @id @default(cuid())
+  bankAccountId     String
+  type              TransactionType
+  amount            Float
+  description       String
+  referenceId       String?             // ID do pedido, despesa, etc.
+  referenceType     String?             // ORDER, EXPENSE, MANUAL, etc.
+  category          String?
+  date              DateTime            @default(now())
+  balanceAfter      Float               // Saldo após a transação
+  notes             String?
+  createdBy         String?
+  createdAt         DateTime            @default(now())
+  
+  BankAccount       BankAccount         @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  ReconciliationItem ReconciliationItem[]
+  
+  @@index([bankAccountId])
+  @@index([date])
+  @@index([type])
+}
+
+// ===== FASE 2: FORNECEDORES E CONTAS A RECEBER =====
+
+model Supplier {
+  id                String        @id @default(cuid())
+  name              String
+  companyName       String?       // Razão social
+  document          String        @unique // CPF ou CNPJ
+  documentType      String        // CPF, CNPJ
+  email             String?
+  phone             String?
+  address           String?
+  city              String?
+  state             String?
+  zipCode           String?
+  bankName          String?
+  bankAgency        String?
+  bankAccount       String?
+  pixKey            String?
+  notes             String?
+  isActive          Boolean       @default(true)
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  Expense           Expense[]
+  RawMaterial       RawMaterial[]
+  Purchase          Purchase[]
+  
+  @@index([document])
+}
+
+model Receivable {
+  id                String              @id @default(cuid())
+  customerId        String?
+  orderId           String?             // Pedido relacionado
+  boletoId          String?             // Boleto relacionado
+  description       String
+  amount            Float
+  dueDate           DateTime
+  paymentDate       DateTime?
+  status            ReceivableStatus    @default(PENDING)
+  paymentMethod     String?             // PIX, BOLETO, CARD, CASH, etc.
+  notes             String?
+  referenceNumber   String?             // Número de referência
+  feeAmount         Float?              // Taxa cobrada (ex: taxa Mercado Pago)
+  netAmount         Float?              // Valor líquido recebido
+  isInstallment     Boolean             @default(false)
+  installmentNumber Int?
+  totalInstallments Int?
+  bankAccountId     String?             // Conta bancária que recebeu
+  createdBy         String?
+  paidBy            String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  Customer          Customer?           @relation(fields: [customerId], references: [id])
+  Order             Order?              @relation(fields: [orderId], references: [id])
+  Boleto            Boleto?             @relation(fields: [boletoId], references: [id])
+  BankAccount       BankAccount?        @relation(fields: [bankAccountId], references: [id])
+  CardTransactions  CardTransaction[]
+  
+  @@index([dueDate])
+  @@index([status])
+  @@index([customerId])
+  @@index([orderId])
+}
+
+model BankReconciliation {
+  id                String                    @id @default(cuid())
+  bankAccountId     String
+  referenceMonth    DateTime                  // Mês de referência
+  startDate         DateTime
+  endDate           DateTime
+  startingBalance   Float
+  endingBalance     Float
+  status            ReconciliationStatus      @default(IN_PROGRESS)
+  reconciledBy      String?
+  reconciledAt      DateTime?
+  notes             String?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  
+  BankAccount       BankAccount               @relation(fields: [bankAccountId], references: [id])
+  Items             ReconciliationItem[]
+  
+  @@index([bankAccountId])
+  @@index([referenceMonth])
+}
+
+model ReconciliationItem {
+  id                    String              @id @default(cuid())
+  reconciliationId      String
+  transactionId         String?             // Transação no sistema
+  externalDescription   String              // Descrição do extrato bancário
+  externalDate          DateTime
+  externalAmount        Float
+  isReconciled          Boolean             @default(false)
+  matchedType           String?             // AUTOMATIC, MANUAL, PARTIAL
+  notes                 String?
+  reconciledBy          String?
+  reconciledAt          DateTime?
+  createdAt             DateTime            @default(now())
+  
+  Reconciliation        BankReconciliation  @relation(fields: [reconciliationId], references: [id], onDelete: Cascade)
+  Transaction           Transaction?        @relation(fields: [transactionId], references: [id])
+  
+  @@index([reconciliationId])
+}
+
+// ===== FASE 3: INTEGRAÇÃO BANCÁRIA E ANÁLISES AVANÇADAS =====
+
+model BankStatement {
+  id                String              @id @default(cuid())
+  bankAccountId     String
+  referenceDate     DateTime            // Data do extrato
+  externalId        String?             // ID externo do banco (Cora)
+  description       String
+  type              String              // CREDIT, DEBIT
+  amount            Float
+  balance           Float               // Saldo após transação
+  category          String?
+  isReconciled      Boolean             @default(false)
+  reconciledWith    String?             // ID da transação reconciliada
+  importedAt        DateTime            @default(now())
+  metadata          String?             // JSON com dados extras do banco
+  
+  BankAccount       BankAccount         @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  
+  @@index([bankAccountId])
+  @@index([referenceDate])
+  @@index([isReconciled])
+  @@unique([bankAccountId, externalId])
+}
+
+model CashFlowPrediction {
+  id                String              @id @default(cuid())
+  predictionDate    DateTime            // Data da previsão
+  predictedIncome   Float               // Receita prevista
+  predictedExpense  Float               // Despesa prevista
+  predictedBalance  Float               // Saldo previsto
+  confidence        Float               @default(0.7) // Confiança da previsão (0-1)
+  method            String              @default("AI") // AI, MANUAL, HISTORICAL
+  notes             String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  @@index([predictionDate])
+}
+
+model Budget {
+  id                String              @id @default(cuid())
+  categoryId        String?             // Categoria de despesa (null = geral)
+  categoryName      String?             // Nome da categoria (para flexibilidade)
+  budgetType        BudgetType          @default(MONTHLY)
+  referenceYear     Int                 // Ano de referência
+  referenceMonth    Int?                // Mês (null se for anual)
+  plannedAmount     Float               // Valor planejado
+  actualAmount      Float               @default(0) // Valor real gasto
+  notes             String?
+  createdBy         String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  Category          ExpenseCategory?    @relation(fields: [categoryId], references: [id])
+  
+  @@index([referenceYear, referenceMonth])
+  @@index([categoryId])
+}
+
+model FinancialAlert {
+  id                String              @id @default(cuid())
+  alertType         AlertType
+  severity          AlertSeverity       @default(MEDIUM)
+  title             String
+  message           String
+  triggerValue      Float?              // Valor que disparou o alerta
+  thresholdValue    Float?              // Valor limite configurado
+  referenceDate     DateTime?
+  isRead            Boolean             @default(false)
+  isResolved        Boolean             @default(false)
+  resolvedBy        String?
+  resolvedAt        DateTime?
+  resolvedNotes     String?
+  createdAt         DateTime            @default(now())
+  
+  @@index([isRead, isResolved])
+  @@index([createdAt])
+  @@index([alertType])
+}
+
+model PaymentReminder {
+  id                String              @id @default(cuid())
+  reminderType      ReminderType
+  referenceId       String              // ID da despesa ou conta a receber
+  referenceType     String              // EXPENSE, RECEIVABLE
+  dueDate           DateTime
+  amount            Float
+  description       String
+  daysBeforeDue     Int                 @default(3) // Dias antes do vencimento
+  reminderDate      DateTime            // Data do lembrete
+  isSent            Boolean             @default(false)
+  sentAt            DateTime?
+  isCompleted       Boolean             @default(false)
+  completedAt       DateTime?
+  notes             String?
+  createdAt         DateTime            @default(now())
+  
+  @@index([reminderDate, isSent])
+  @@index([referenceType, referenceId])
+}
+
+model ProductProfitability {
+  id                String              @id @default(cuid())
+  productId         String
+  productName       String
+  referenceMonth    DateTime            // Mês de referência
+  unitsSold         Int                 @default(0)
+  grossRevenue      Float               @default(0) // Receita bruta
+  netRevenue        Float               @default(0) // Receita líquida (descontando taxas)
+  costOfGoods       Float               @default(0) // Custo dos produtos
+  grossProfit       Float               @default(0) // Lucro bruto
+  profitMargin      Float               @default(0) // Margem de lucro %
+  contributionMargin Float              @default(0) // Margem de contribuição %
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  Product           Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  @@unique([productId, referenceMonth])
+  @@index([referenceMonth])
+  @@index([profitMargin])
+}
+
+model SellerProfitability {
+  id                String              @id @default(cuid())
+  sellerId          String
+  sellerName        String
+  referenceMonth    DateTime            // Mês de referência
+  totalOrders       Int                 @default(0)
+  grossRevenue      Float               @default(0)
+  netRevenue        Float               @default(0)
+  totalCommission   Float               @default(0)
+  averageTicket     Float               @default(0)
+  profitMargin      Float               @default(0)
+  activeCustomers   Int                 @default(0)
+  newCustomers      Int                 @default(0)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  Seller            Seller              @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  
+  @@unique([sellerId, referenceMonth])
+  @@index([referenceMonth])
+  @@index([profitMargin])
+}
+
+model CoraIntegrationLog {
+  id                String              @id @default(cuid())
+  operationType     String              // IMPORT_STATEMENT, CREATE_PAYMENT, CHECK_STATUS
+  status            String              // SUCCESS, FAILED, PARTIAL
+  recordsProcessed  Int                 @default(0)
+  recordsFailed     Int                 @default(0)
+  errorMessage      String?
+  metadata          String?             // JSON com detalhes
+  executedAt        DateTime            @default(now())
+  
+  @@index([executedAt])
+  @@index([operationType])
+}
+
+// ================ FIM FASE 3 ================
+
+// ================ SISTEMA DE PAGAMENTOS PARCIAIS ================
+
+model Payment {
+  id                String          @id @default(cuid())
+  orderId           String          // Pedido relacionado
+  amount            Float           // Valor do pagamento
+  paymentMethod     PaymentMethod   // Forma de pagamento (CASH, PIX, CARD, etc)
+  paymentDate       DateTime        @default(now()) // Data do pagamento
+  receivedBy        String?         // Quem recebeu (usuário ou vendedor)
+  notes             String?         // Observações
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  Order             Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  
+  @@index([orderId])
+  @@index([paymentDate])
+}
+
+// ================ FIM SISTEMA DE PAGAMENTOS PARCIAIS ================
+
+// ================ SISTEMA DE CARTÃO DE CRÉDITO ================
+
+model CreditCard {
+  id                String                @id @default(cuid())
+  name              String                // Nome do cartão (ex: "Nubank Empresa", "Itaú Corporativo")
+  cardNumber        String?               // Últimos 4 dígitos do cartão
+  cardFlag          String?               // Bandeira (Visa, Master, Elo)
+  limit             Float?                // Limite do cartão
+  availableLimit    Float?                // Limite disponível (atualizado dinamicamente)
+  closingDay        Int                   // Dia de fechamento da fatura (1-31)
+  dueDay            Int                   // Dia de vencimento da fatura (1-31)
+  isActive          Boolean               @default(true)
+  color             String?               // Cor para identificação visual
+  notes             String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  
+  Invoices          CreditCardInvoice[]
+  Expenses          CreditCardExpense[]
+  
+  @@index([isActive])
+}
+
+model CreditCardInvoice {
+  id                String                  @id @default(cuid())
+  creditCardId      String
+  referenceMonth    DateTime                // Mês de referência (YYYY-MM-01)
+  closingDate       DateTime                // Data de fechamento
+  dueDate           DateTime                // Data de vencimento
+  totalAmount       Float                   @default(0)
+  status            InvoiceStatus           @default(OPEN)
+  paymentDate       DateTime?               // Data do pagamento
+  paidAmount        Float?                  // Valor pago
+  expenseId         String?                 // ID da despesa gerada ao fechar a fatura
+  bankAccountId     String?                 // Conta que pagou a fatura
+  notes             String?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  
+  CreditCard        CreditCard              @relation(fields: [creditCardId], references: [id], onDelete: Cascade)
+  Expenses          CreditCardExpense[]
+  
+  @@unique([creditCardId, referenceMonth])
+  @@index([creditCardId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+model CreditCardExpense {
+  id                String                @id @default(cuid())
+  creditCardId      String
+  invoiceId         String?               // Fatura à qual pertence (null se ainda aberta)
+  description       String
+  amount            Float
+  purchaseDate      DateTime              // Data da compra
+  categoryId        String?               // Categoria da despesa
+  expenseType       ExpenseType           @default(OTHER) // Tipo de despesa
+  supplierName      String?
+  referenceNumber   String?               // Número da nota/comprovante
+  installments      Int                   @default(1) // Número de parcelas
+  installmentNumber Int                   @default(1) // Número da parcela atual
+  notes             String?
+  attachmentUrl     String?               // URL do comprovante
+  attachmentName    String?
+  createdBy         String?
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
+  
+  CreditCard        CreditCard            @relation(fields: [creditCardId], references: [id], onDelete: Cascade)
+  Invoice           CreditCardInvoice?    @relation(fields: [invoiceId], references: [id])
+  Category          ExpenseCategory?      @relation(fields: [categoryId], references: [id])
+  
+  @@index([creditCardId])
+  @@index([expenseType])
+  @@index([invoiceId])
+  @@index([purchaseDate])
+}
+
+// ================ FIM SISTEMA DE CARTÃO DE CRÉDITO ================
+
+// ================ MÓDULO DE COMPRAS ================
+
+model RawMaterial {
+  id                String            @id @default(cuid())
+  name              String
+  description       String?
+  sku               String?           @unique  // Código do produto
+  measurementUnit   MeasurementUnit   @default(UN)
+  currentStock      Float             @default(0)
+  minStock          Float?            // Estoque mínimo (alerta)
+  maxStock          Float?            // Estoque máximo
+  costPerUnit       Float?            // Custo unitário médio
+  showInCatalog     Boolean           @default(false) // Mostrar no catálogo de clientes
+  priceWholesale    Float?            // Preço de venda (quando showInCatalog = true)
+  soldByWeight      Boolean           @default(false) // Indica se é vendido por peso (kg)
+  imageUrl          String?
+  supplierId        String?           // Fornecedor principal
+  categoryId        String?           // Categoria (reutiliza ExpenseCategory)
+  isActive          Boolean           @default(true)
+  notes             String?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  Supplier          Supplier?         @relation(fields: [supplierId], references: [id])
+  Category          ExpenseCategory?  @relation(fields: [categoryId], references: [id])
+  PurchaseItem      PurchaseItem[]
+  RecipeIngredient  RecipeIngredient[] // Ingredientes que usam esta matéria-prima
+  CostHistory       CostHistory[]      // Histórico de variações de custo
+  
+  CustomerRawMaterial CustomerRawMaterial[]
+  
+  @@index([name])
+  @@index([isActive])
+  @@index([showInCatalog])
+}
+
+model Purchase {
+  id                String          @id @default(cuid())
+  purchaseNumber    String          @unique  // Número da compra (ex: COMP-202511-001)
+  supplierId        String
+  customerId        String?         // Cliente que fez a compra (null = compra do admin)
+  totalAmount       Float
+  status            ExpenseStatus   @default(PENDING)
+  expenseType       ExpenseType     @default(RAW_MATERIALS)
+  purchaseDate      DateTime        @default(now())
+  dueDate           DateTime
+  paymentDate       DateTime?
+  paymentMethod     String?
+  bankAccountId     String?         // Conta bancária usada no pagamento
+  expenseId         String?         @unique // Despesa criada automaticamente no financeiro
+  invoiceNumber     String?         // Número da nota fiscal
+  invoiceUrl        String?         // URL da nota fiscal anexada
+  notes             String?
+  createdBy         String?
+  paidBy            String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  Supplier          Supplier        @relation(fields: [supplierId], references: [id])
+  Customer          Customer?       @relation(fields: [customerId], references: [id])
+  BankAccount       BankAccount?    @relation(fields: [bankAccountId], references: [id])
+  Expense           Expense?        @relation(fields: [expenseId], references: [id])
+  PurchaseItem      PurchaseItem[]
+  
+  @@index([supplierId])
+  @@index([status])
+  @@index([purchaseDate])
+  @@index([expenseType])
+  @@index([expenseId])
+}
+
+model PurchaseItem {
+  id                String        @id @default(cuid())
+  purchaseId        String
+  rawMaterialId     String
+  quantity          Float
+  unitPrice         Float
+  totalPrice        Float         // quantity * unitPrice
+  notes             String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  Purchase          Purchase      @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  RawMaterial       RawMaterial   @relation(fields: [rawMaterialId], references: [id])
+  
+  @@index([purchaseId])
+  @@index([rawMaterialId])
+}
+
+// ================ FIM MÓDULO DE COMPRAS ================
+
+// ================ FIM SISTEMA FINANCEIRO ================
+
+enum BudgetType {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+  CUSTOM
+}
+
+enum AlertType {
+  LOW_BALANCE
+  OVERDUE_PAYMENT
+  OVERDUE_RECEIVABLE
+  BUDGET_EXCEEDED
+  UNUSUAL_EXPENSE
+  CASH_FLOW_NEGATIVE
+  PROFIT_MARGIN_LOW
+  RECONCILIATION_PENDING
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ReminderType {
+  PAYMENT_DUE
+  RECEIVABLE_DUE
+  RECONCILIATION_DUE
+  BUDGET_REVIEW
+}
+
+enum BoletoStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum ReceivableStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+  PARTIAL
+}
+
+enum ReconciliationStatus {
+  IN_PROGRESS
+  COMPLETED
+  REVIEWED
+  CANCELLED
+}
+
+enum CommissionStatus {
+  PENDING
+  RELEASED
+  PAID
+  CANCELLED
+}
+
+enum DeliveryType {
+  DELIVERY
+  PICKUP
+}
+
+enum DiscountType {
+  FIXED
+  PERCENTAGE
+}
+
+enum NotificationCategory {
+  GENERAL
+  ORDER
+  BOLETO
+  PROMOTION
+  COUPON
+  COMMISSION
+  CUSTOMER_ALERT
+  PRODUCT_ALERT
+}
+
+enum NotificationDeliveryMode {
+  AUTOMATIC
+  MANUAL
+}
+
+enum NotificationType {
+  NEW_ORDER
+  ORDER_UPDATE
+  COMMUNICATION
+  PROMOTION
+  SYSTEM
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PREPARING
+  READY
+  DELIVERING
+  DELIVERED
+  CANCELLED
+}
+
+enum OrderType {
+  WHOLESALE
+  RETAIL
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  DEBIT
+  CREDIT_CARD
+  PIX
+  CREDIT
+  BOLETO
+  NOTINHA
+}
+
+enum UserRole {
+  CUSTOMER
+  SELLER
+}
+
+enum UserType {
+  ADMIN
+  CUSTOMER
+  SELLER
+}
+
+enum PointTransactionType {
+  EARNED_FROM_ORDER
+  REDEEMED_FOR_PRIZE
+  MANUAL_ADJUSTMENT
+  BONUS
+  EXPIRED
+  REFERRAL_BONUS
+}
+
+enum RedemptionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  DELIVERED
+  CANCELLED
+}
+
+enum ReferralStatus {
+  PENDING           // Indicação criada, aguardando primeira compra
+  ACTIVE            // Indicado fez primeira compra
+  BONUS_AWARDED     // Bônus foi concedido
+  EXPIRED           // Expirou sem completar requisitos
+  CANCELLED         // Indicação cancelada
+}
+
+enum ExpenseStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+  SCHEDULED
+}
+
+enum ExpenseType {
+  OPERATIONAL     // Despesas operacionais (aluguel, funcionários, etc.)
+  PRODUCTS        // Despesas com produtos (palitos, embalagens, temperos)
+  RAW_MATERIALS   // Compras de matéria-prima (carne, frango, etc.)
+  INVESTMENT      // Investimentos (equipamentos, melhorias, expansão)
+  PROLABORE       // Pró-labore (retirada dos sócios)
+  OTHER           // Outras despesas
+}
+
+enum MeasurementUnit {
+  KG          // Quilograma
+  G           // Grama
+  L           // Litro
+  ML          // Mililitro
+  UN          // Unidade
+  CX          // Caixa
+  PC          // Pacote
+  FD          // Fardo
+  SC          // Saco
+  Other       // Outro
+}
+
+enum TransactionType {
+  INCOME
+  EXPENSE
+  TRANSFER
+  ADJUSTMENT
+}
+
+enum PaymentStatus {
+  UNPAID      // Nenhum pagamento feito
+  PARTIAL     // Pagamento parcial
+  PAID        // Totalmente pago
+}
+
+enum InvoiceStatus {
+  OPEN        // Fatura aberta, ainda recebendo lançamentos
+  CLOSED      // Fatura fechada, aguardando pagamento
+  PAID        // Fatura paga
+  OVERDUE     // Fatura vencida
+  CANCELLED   // Fatura cancelada
+}
+
+
+enum InvoiceType {
+  NFE         // Nota Fiscal Eletrônica
+  NFCE        // Nota Fiscal de Consumidor Eletrônica
+}
+
+enum FiscalStatus {
+  PENDING     // Aguardando emissão
+  PROCESSING  // Em processamento
+  AUTHORIZED  // Autorizada
+  CANCELLED   // Cancelada
+  DENIED      // Denegada
+  ERROR       // Erro na emissão
+}
+
+model FiscalInvoice {
+  id                String        @id @default(cuid())
+  invoiceNumber     String?       // Número da nota fiscal
+  series            String?       // Série da nota
+  invoiceType       InvoiceType   // Tipo de nota (NF-e ou NFC-e)
+  status            FiscalStatus  @default(PENDING)
+  
+  // Dados do cliente
+  customerName      String
+  customerCpfCnpj   String?
+  customerEmail     String?
+  customerPhone     String?
+  
+  // Endereço do cliente
+  customerAddress   String?
+  customerNumber    String?
+  customerComplement String?
+  customerDistrict  String?
+  customerCity      String?
+  customerState     String?
+  customerZipCode   String?
+  
+  // Valores
+  totalValue        Float
+  productsValue     Float
+  taxValue          Float         @default(0)
+  discount          Float         @default(0)
+  
+  // Dados fiscais
+  accessKey         String?       // Chave de acesso da nota (44 dígitos)
+  protocol          String?       // Protocolo de autorização
+  authorizationDate DateTime?     // Data de autorização
+  
+  // Arquivos
+  xmlUrl            String?       // URL do XML
+  pdfUrl            String?       // URL do PDF
+  
+  // Plugnotas
+  plugnotasId       String?       // ID da nota no Plugnotas
+  
+  // Dados da empresa (redundante mas útil para histórico)
+  companyCnpj       String
+  companyName       String
+  companyIe         String
+  
+  // Relacionamentos
+  orderId           String?
+  Order             Order?        @relation(fields: [orderId], references: [id])
+  
+  // Produtos da nota
+  items             FiscalInvoiceItem[]
+  
+  // Metadados
+  notes             String?       // Observações
+  cancellationReason String?      // Motivo do cancelamento
+  errorMessage      String?       // Mensagem de erro
+  
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  
+  @@index([invoiceNumber])
+  @@index([status])
+  @@index([orderId])
+  @@index([createdAt])
+}
+
+model FiscalInvoiceItem {
+  id                String        @id @default(cuid())
+  fiscalInvoiceId   String
+  FiscalInvoice     FiscalInvoice @relation(fields: [fiscalInvoiceId], references: [id], onDelete: Cascade)
+  
+  // Dados do produto
+  productName       String
+  productCode       String?       // Código interno do produto
+  ncm               String        // NCM do produto
+  cfop              String        // CFOP da operação
+  quantity          Float
+  unitValue         Float
+  totalValue        Float
+  
+  // Impostos
+  icms              Float         @default(0)
+  ipi               Float         @default(0)
+  pis               Float         @default(0)
+  cofins            Float         @default(0)
+  
+  createdAt         DateTime      @default(now())
+  
+  @@index([fiscalInvoiceId])
+}
+
+// ============================================
+// MÓDULO DE RH (RECURSOS HUMANOS)
+// ============================================
+
+// Departamentos da empresa
+model Department {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  code      String?    @unique
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  
+  employees Employee[]
+}
+
+// Funcionários
+model Employee {
+  id              String         @id @default(cuid())
+  employeeNumber  Int            @unique // Tra. No. do relógio Kenup
+  name            String
+  cpf             String         @unique
+  position        String         // Cargo
+  salary          Float?
+  admissionDate   DateTime
+  terminationDate DateTime?
+  departmentId    String?
+  status          EmployeeStatus @default(ACTIVE)
+  isActive        Boolean        @default(true)
+  
+  // Dados de contato
+  email           String?
+  phone           String?
+  address         String?
+  
+  // Autenticação
+  password        String?        // Senha para login do funcionário
+  
+  // Dados de pagamento
+  receivesAdvance Boolean        @default(false) // Recebe antecipação de 40%?
+  foodVoucherAmount Float        @default(0)     // Valor do vale alimentação
+  creditLimit     Float          @default(0)     // Limite de crédito para pedidos
+  
+  // Vínculo com Vendedor
+  sellerId        String?        // Se preenchido, funcionário também é vendedor
+  
+  // Vínculo com Entregador
+  isDeliveryPerson Boolean       @default(false) // Se true, funcionário também é entregador
+  
+  // Metadados
+  notes           String?        // Observações gerais
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  // Relacionamentos
+  department      Department?    @relation(fields: [departmentId], references: [id])
+  seller          Seller?        @relation(fields: [sellerId], references: [id])
+  timeRecords     TimeRecord[]
+  documents       EmployeeDocument[]
+  workSchedule    WorkSchedule?  // Jornada de trabalho
+  timeOffs        TimeOff[]      // Afastamentos, atestados, férias
+  payments        EmployeePayment[] // Histórico de pagamentos
+  paymentAcknowledgments EmployeePaymentAcknowledgment[] // Aceites de contracheques
+  
+  @@index([employeeNumber])
+  @@index([cpf])
+  @@index([status])
+  @@index([sellerId])
+}
+
+// Registros de ponto (importados do relógio Kenup)
+model TimeRecord {
+  id            String   @id @default(cuid())
+  employeeId    String
+  employeeNumber Int     // Tra. No. para vincular com funcionário
+  dateTime      DateTime // Data e hora da marcação
+  machineNumber Int?     // Número da máquina/relógio
+  
+  // Dados adicionais
+  isManual      Boolean  @default(false) // Se foi marcação manual (não do relógio)
+  notes         String?  // Observações (ex: justificativa de falta)
+  importBatchId String?  // ID do lote de importação
+  
+  createdAt     DateTime @default(now())
+  
+  // Relacionamentos
+  employee      Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  
+  @@index([employeeId])
+  @@index([employeeNumber])
+  @@index([dateTime])
+  @@index([importBatchId])
+}
+
+// Feriados e dias não úteis
+model Holiday {
+  id          String   @id @default(cuid())
+  date        DateTime @unique
+  name        String
+  isRecurring Boolean  @default(false) // Se é anual (ex: Natal, Ano Novo)
+  isActive    Boolean  @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([date])
+}
+
+// Documentos dos funcionários
+model EmployeeDocument {
+  id           String       @id @default(cuid())
+  employeeId   String
+  documentType DocumentType
+  title        String
+  description  String?
+  fileUrl      String       // URL do arquivo no S3
+  fileName     String
+  fileSize     Int?         // Tamanho em bytes
+  
+  // Dados adicionais
+  referenceDate DateTime?  // Data de referência (ex: mês do contracheque)
+  uploadedBy    String?    // Quem fez o upload
+  notes         String?
+  
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  
+  // Relacionamentos
+  employee     Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  acknowledgment EmployeePaymentAcknowledgment?
+  
+  @@index([employeeId])
+  @@index([documentType])
+  @@index([referenceDate])
+}
+
+// Jornada de Trabalho do Funcionário
+model WorkSchedule {
+  id              String   @id @default(cuid())
+  employeeId      String   @unique // Um funcionário tem apenas uma jornada ativa
+  
+  // Dias de trabalho (seg-sex, seg-sab, etc.)
+  monday          Boolean  @default(true)
+  tuesday         Boolean  @default(true)
+  wednesday       Boolean  @default(true)
+  thursday        Boolean  @default(true)
+  friday          Boolean  @default(true)
+  saturday        Boolean  @default(false)
+  sunday          Boolean  @default(false)
+  
+  // Jornada diária em minutos (ex: 528 = 8h48min, 480 = 8h)
+  dailyMinutes    Int      @default(528) // 8h48min é padrão CLT (DEPRECATED - usar campos específicos por dia)
+  weeklyMinutes   Int      @default(2640) // 44h semanais
+  
+  // Minutos específicos por dia da semana (permite jornadas diferentes por dia)
+  mondayMinutes    Int?     // Ex: 480 = 8h
+  tuesdayMinutes   Int?     // Ex: 480 = 8h
+  wednesdayMinutes Int?     // Ex: 480 = 8h
+  thursdayMinutes  Int?     // Ex: 480 = 8h
+  fridayMinutes    Int?     // Ex: 480 = 8h
+  saturdayMinutes  Int?     // Ex: 240 = 4h (meio período)
+  sundayMinutes    Int?     // Ex: 0 = folga
+  
+  // Horários flexíveis ou fixos
+  hasFlexibleSchedule Boolean @default(false)
+  startTime       String?  // Ex: "08:00"
+  endTime         String?  // Ex: "17:48"
+  lunchBreakMinutes Int    @default(60) // Intervalo de almoço
+  
+  // Metadados
+  isActive        Boolean  @default(true)
+  notes           String?  // Observações sobre a jornada
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  // Relacionamentos
+  employee        Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  
+  @@index([employeeId])
+  @@index([isActive])
+}
+
+// Afastamentos, Atestados, Feriados Individuais
+model TimeOff {
+  id          String      @id @default(cuid())
+  employeeId  String
+  type        TimeOffType
+  
+  // Período
+  startDate   DateTime
+  endDate     DateTime
+  
+  // Detalhes
+  reason      String?     // Motivo do afastamento
+  notes       String?     // Observações adicionais
+  documentUrl String?     // URL do atestado/documento no S3
+  
+  // Aprovação
+  isApproved  Boolean     @default(false)
+  approvedBy  String?     // ID do usuário que aprovou
+  approvedAt  DateTime?
+  
+  // Metadados
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  
+  // Relacionamentos
+  employee    Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  
+  @@index([employeeId])
+  @@index([type])
+  @@index([startDate])
+  @@index([endDate])
+}
+
+// Folhas de Pagamento (PDFs da contabilidade)
+model PayrollSheet {
+  id              String            @id @default(cuid())
+  month           Int               // Mês (1-12)
+  year            Int               // Ano
+  fileUrl         String            // URL do PDF no S3
+  fileName        String            // Nome original do arquivo
+  uploadedBy      String            // Email do usuário que fez upload
+  processedAt     DateTime?         // Quando foi processado
+  isProcessed     Boolean           @default(false)
+  
+  // Metadados
+  notes           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  
+  // Relacionamentos
+  payments        EmployeePayment[] // Pagamentos lançados desta folha
+  
+  // Permite múltiplas folhas no mesmo mês (adiantamento, vale-alimentação, salário)
+  @@index([month, year])
+  @@index([isProcessed])
+}
+
+// Pagamentos de Funcionários
+model EmployeePayment {
+  id                  String         @id @default(cuid())
+  employeeId          String
+  payrollSheetId      String?        // Folha de pagamento de origem
+  
+  // Valores BRUTOS (antes dos descontos)
+  salaryGrossAmount       Float          @default(0) // Salário bruto
+  advanceGrossAmount      Float          @default(0) // Antecipação 40% bruta
+  foodVoucherGrossAmount  Float          @default(0) // Vale alimentação bruto
+  bonusGrossAmount        Float          @default(0) // Premiação bruta
+  
+  // Valores LÍQUIDOS (após descontos) - são estes que geram as despesas
+  salaryAmount        Float          @default(0) // Salário líquido
+  advanceAmount       Float          @default(0) // Antecipação 40% líquida
+  foodVoucherAmount   Float          @default(0) // Vale alimentação líquido
+  bonusAmount         Float          @default(0) // Premiação líquida
+  
+  // Descontos
+  inssDiscount        Float          @default(0) // Desconto de INSS
+  irpfDiscount        Float          @default(0) // Desconto de IRPF
+  otherDiscounts      Float          @default(0) // Outros descontos
+  totalDiscounts      Float          @default(0) // Total de descontos
+  
+  // Total
+  totalGrossAmount    Float          @default(0) // Total bruto (soma dos brutos)
+  totalAmount         Float          // Total líquido a pagar (bruto - descontos)
+  
+  // Datas de vencimento
+  salaryDueDate       DateTime?      // Dia 5
+  advanceDueDate      DateTime?      // Dia 20
+  foodVoucherDueDate  DateTime?      // Dia 15
+  bonusDueDate        DateTime?      // Dia 10
+  
+  // Status
+  isPaid              Boolean        @default(false)
+  paidAt              DateTime?
+  
+  // Documento
+  signedPayslipUrl    String?        // Contracheque assinado pelo funcionário
+  
+  // Contas a pagar (referências)
+  salaryExpenseId     String?        // ID da despesa de salário
+  advanceExpenseId    String?        // ID da despesa de antecipação
+  foodVoucherExpenseId String?       // ID da despesa de vale
+  bonusExpenseId      String?        // ID da despesa de premiação
+  
+  // Metadados
+  month               Int            // Mês de referência
+  year                Int            // Ano de referência
+  notes               String?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+  
+  // Relacionamentos
+  employee            Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  payrollSheet        PayrollSheet?  @relation(fields: [payrollSheetId], references: [id])
+  acknowledgments     EmployeePaymentAcknowledgment[]
+  
+  @@index([employeeId])
+  @@index([payrollSheetId])
+  @@index([month, year])
+  @@index([isPaid])
+}
+
+// Aceite Digital de Contracheques (Validade Jurídica - Lei 14.063/2020)
+model EmployeePaymentAcknowledgment {
+  id                String           @id @default(cuid())
+  employeeId        String
+  paymentId         String
+  documentId        String?          @unique
+  
+  // Dados de rastreabilidade jurídica
+  acknowledgedAt    DateTime         @default(now())
+  ipAddress         String           // IP de onde foi assinado
+  userAgent         String           @db.Text // Navegador/dispositivo
+  documentHash      String?          // Hash SHA-256 do documento para integridade
+  termsVersion      String           @default("1.0") // Versão dos termos aceitos
+  
+  // Declaração explícita de aceite
+  acceptedTerms     Boolean          @default(true)
+  acceptanceText    String           @db.Text // Texto completo dos termos aceitos
+  
+  // Metadados
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  
+  // Relacionamentos
+  employee          Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  payment           EmployeePayment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  document          EmployeeDocument? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId])
+  @@index([paymentId])
+  @@index([acknowledgedAt])
+}
+
+// ENUMS para RH
+enum EmployeeStatus {
+  ACTIVE      // Ativo
+  INACTIVE    // Inativo/Demitido
+  ON_LEAVE    // De férias
+  ON_MEDICAL_LEAVE // Afastado
+}
+
+enum TimeOffType {
+  MEDICAL_LEAVE    // Atestado médico
+  VACATION         // Férias
+  PERSONAL_DAY     // Dia pessoal
+  ABSENCE          // Falta (sem justificativa)
+  JUSTIFIED_ABSENCE // Falta justificada
+  HOLIDAY          // Feriado individual
+  MATERNITY_LEAVE  // Licença maternidade
+  PATERNITY_LEAVE  // Licença paternidade
+  OTHER            // Outros
+}
+
+enum DocumentType {
+  CONTRACHEQUE  // Contracheque
+  ADVERTENCIA   // Advertência
+  SUSPENSAO     // Suspensão
+  PREMIACAO     // Premiação/Bonificação
+  COMPROVANTE   // Comprovante genérico
+  OUTROS        // Outros documentos
+}
+
+// ============================================
+// MÓDULO DE GESTÃO DO CLIENTE (ASSADORES)
+// Sistema completo de ERP para clientes gerenciarem seus negócios
+// ============================================
+
+// Configurações gerais do módulo de gestão do cliente
+model ClientManagementConfig {
+  id                String   @id @default(cuid())
+  customerId        String   @unique // Cliente dono deste módulo
+  
+  // Configurações visuais
+  businessName      String?  // Nome do negócio do cliente
+  businessLogo      String?  // URL do logo
+  
+  // Metas mensais
+  monthlyRevenueGoal Float?  // Meta de faturamento
+  monthlyUnitsSoldGoal Int?  // Meta de unidades vendidas
+  
+  // Configurações do PDV
+  enableCommands    Boolean  @default(true)  // Habilitar comandas/mesas
+  enableInventory   Boolean  @default(true)  // Habilitar controle de estoque
+  enableFinancial   Boolean  @default(true)  // Habilitar financeiro
+  
+  // Configurações de notificações
+  lowStockAlert     Boolean  @default(true)  // Alertar estoque baixo
+  paymentReminders  Boolean  @default(true)  // Lembretes de pagamento
+  goalAlerts        Boolean  @default(true)  // Alertas de meta
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  Customer          Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  @@index([customerId])
+}
+
+// Conta bancária do cliente (assador)
+model ClientBankAccount {
+  id                String   @id @default(cuid())
+  customerId        String   // Dono da conta
+  
+  name              String   // Nome da conta (ex: "Caixa", "Banco", "Pix")
+  accountType       String   // CASH, BANK, DIGITAL_WALLET
+  bankName          String?
+  balance           Float    @default(0)
+  isActive          Boolean  @default(true)
+  color             String?  // Cor para identificação
+  notes             String?
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  Customer          Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Transactions      ClientTransaction[]
+  Expenses          ClientExpense[]
+  Incomes           ClientIncome[]
+  
+  @@index([customerId])
+  @@index([isActive])
+}
+
+// Despesas do cliente (contas a pagar)
+model ClientExpense {
+  id                String               @id @default(cuid())
+  customerId        String               // Dono da despesa
+  
+  description       String
+  amount            Float
+  category          String               // Categoria (carvão, gás, embalagens, etc)
+  dueDate           DateTime
+  paymentDate       DateTime?
+  status            ClientExpenseStatus  @default(PENDING)
+  paymentMethod     String?              // CASH, PIX, CARD
+  supplierName      String?              // Nome do fornecedor
+  bankAccountId     String?              // Conta que pagou
+  notes             String?
+  attachmentUrl     String?              // Comprovante
+  
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  
+  Customer          Customer             @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  BankAccount       ClientBankAccount?   @relation(fields: [bankAccountId], references: [id])
+  
+  @@index([customerId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+// Receitas do cliente (contas a receber)
+model ClientIncome {
+  id                String              @id @default(cuid())
+  customerId        String              // Dono da receita
+  
+  description       String
+  amount            Float
+  category          String              // SALE, SERVICE, OTHER
+  dueDate           DateTime
+  receivedDate      DateTime?
+  status            ClientIncomeStatus  @default(PENDING)
+  paymentMethod     String?             // CASH, PIX, CARD, FIADO
+  customerName      String?             // Nome do cliente (fiado)
+  bankAccountId     String?             // Conta que recebeu
+  notes             String?
+  
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  Customer          Customer            @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  BankAccount       ClientBankAccount?  @relation(fields: [bankAccountId], references: [id])
+  
+  @@index([customerId])
+  @@index([status])
+  @@index([dueDate])
+}
+
+// Produtos do cliente para venda no PDV
+model ClientProduct {
+  id                String             @id @default(cuid())
+  customerId        String             // Dono do produto
+  
+  name              String
+  description       String?
+  category          String             // ESPETO, BEBIDA, ACOMPANHAMENTO
+  unitPrice         Float
+  costPrice         Float?             // Custo do produto
+  imageUrl          String?
+  isActive          Boolean            @default(true)
+  trackInventory    Boolean            @default(true) // Controlar estoque?
+  
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  
+  Customer          Customer           @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Inventory         ClientInventory?
+  SaleItems         ClientSaleItem[]
+  WasteRecords      WasteRecord[]
+  
+  @@index([customerId])
+  @@index([isActive])
+  @@index([category])
+}
+
+// Estoque do cliente
+model ClientInventory {
+  id                String         @id @default(cuid())
+  customerId        String         // Dono do estoque
+  productId         String         @unique // Produto vinculado
+  
+  currentStock      Float          @default(0)
+  minStock          Float?         // Alerta de estoque mínimo
+  maxStock          Float?
+  measurementUnit   String         @default("UN") // UN, KG, L
+  
+  // Controle automático
+  lastRestockDate   DateTime?
+  lastRestockQuantity Float?
+  
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  
+  Customer          Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Product           ClientProduct  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  Movements         ClientInventoryMovement[]
+  
+  @@index([customerId])
+  @@index([productId])
+}
+
+// Movimentações de estoque
+model ClientInventoryMovement {
+  id                String                  @id @default(cuid())
+  customerId        String                  // Dono
+  inventoryId       String                  // Estoque afetado
+  
+  type              ClientInventoryMovementType
+  quantity          Float                   // Positivo = entrada, Negativo = saída
+  reason            String                  // PURCHASE, SALE, LOSS, ADJUSTMENT
+  referenceId       String?                 // ID da venda ou compra
+  notes             String?
+  performedBy       String?                 // Quem fez a movimentação
+  
+  createdAt         DateTime                @default(now())
+  
+  Customer          Customer                @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Inventory         ClientInventory         @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  
+  @@index([customerId])
+  @@index([inventoryId])
+  @@index([createdAt])
+}
+
+// Comandas/Mesas do cliente
+model ClientTable {
+  id                String            @id @default(cuid())
+  customerId        String            // Dono da mesa
+  
+  tableNumber       String            // Número da mesa
+  tableName         String?           // Nome opcional (ex: "Mesa VIP")
+  status            ClientTableStatus @default(AVAILABLE)
+  capacity          Int?              // Capacidade de pessoas
+  currentTotal      Float             @default(0) // Total atual da comanda
+  
+  // Controle de sessão
+  openedAt          DateTime?
+  closedAt          DateTime?
+  openedBy          String?           // Quem abriu
+  closedBy          String?           // Quem fechou
+  
+  notes             String?
+  
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  Customer          Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Items             ClientTableItem[]
+  
+  @@unique([customerId, tableNumber])
+  @@index([customerId])
+  @@index([status])
+}
+
+// Itens da comanda/mesa
+model ClientTableItem {
+  id                String        @id @default(cuid())
+  customerId        String        // Dono
+  tableId           String        // Mesa/Comanda
+  productId         String        // Produto vendido
+  
+  productName       String
+  quantity          Int
+  unitPrice         Float
+  totalPrice        Float
+  notes             String?       // Observações (ex: "sem cebola")
+  
+  createdAt         DateTime      @default(now())
+  
+  Customer          Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Table             ClientTable   @relation(fields: [tableId], references: [id], onDelete: Cascade)
+  
+  @@index([customerId])
+  @@index([tableId])
+}
+
+// Vendas do PDV (quando fecha a comanda ou venda direta)
+model ClientSale {
+  id                String            @id @default(cuid())
+  customerId        String            // Dono da venda
+  
+  saleNumber        String            // Número da venda
+  tableId           String?           // Mesa relacionada (se houver)
+  customerName      String?           // Nome do cliente (fiado)
+  
+  subtotal          Float
+  discount          Float             @default(0)
+  total             Float
+  
+  paymentMethod     String            // CASH, PIX, CARD, FIADO
+  paymentStatus     ClientPaymentStatus @default(PAID)
+  isPaid            Boolean           @default(true)  // Se já foi pago
+  linkedCustomerId  String?           // Cliente vinculado para pagar depois
+  
+  // Divisão de pagamento
+  splitPayment      Boolean           @default(false)
+  cashAmount        Float?
+  pixAmount        Float?
+  cardAmount        Float?
+  
+  notes             String?
+  soldBy            String?           // Quem fez a venda
+  
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  
+  Customer          Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Items             ClientSaleItem[]
+  
+  @@index([customerId])
+  @@index([createdAt])
+  @@index([paymentStatus])
+}
+
+// Itens da venda
+model ClientSaleItem {
+  id                String        @id @default(cuid())
+  customerId        String        // Dono
+  saleId            String        // Venda
+  productId         String        // Produto vendido
+  
+  productName       String
+  quantity          Int
+  unitPrice         Float
+  totalPrice        Float
+  
+  createdAt         DateTime      @default(now())
+  
+  Customer          Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Sale              ClientSale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  Product           ClientProduct @relation(fields: [productId], references: [id])
+  
+  @@index([customerId])
+  @@index([saleId])
+}
+
+// Transações financeiras do cliente (movimentações de caixa)
+// Registro de Desperdício (separado das vendas)
+model WasteRecord {
+  id                String        @id @default(cuid())
+  customerId        String        // Dono
+  productId         String        // Produto desperdiçado
+  
+  productName       String        // Nome do produto
+  quantity          Int           // Quantidade desperdiçada
+  approximateValue  Float         // Valor aproximado do desperdício
+  
+  reason            String?       // Motivo (queimado, vencido, etc)
+  notes             String?       // Observações adicionais
+  
+  createdAt         DateTime      @default(now())
+  
+  Customer          Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Product           ClientProduct @relation(fields: [productId], references: [id])
+  
+  @@index([customerId])
+  @@index([createdAt])
+}
+
+model ClientTransaction {
+  id                String                  @id @default(cuid())
+  customerId        String                  // Dono
+  bankAccountId     String                  // Conta afetada
+  
+  type              ClientTransactionType
+  amount            Float
+  description       String
+  category          String?                 // Categoria da transação
+  referenceId       String?                 // ID da venda, despesa, etc
+  referenceType     String?                 // SALE, EXPENSE, INCOME, TRANSFER
+  
+  balanceAfter      Float                   // Saldo após transação
+  notes             String?
+  
+  createdAt         DateTime                @default(now())
+  
+  Customer          Customer                @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  BankAccount       ClientBankAccount       @relation(fields: [bankAccountId], references: [id], onDelete: Cascade)
+  
+  @@index([customerId])
+  @@index([bankAccountId])
+  @@index([createdAt])
+  @@index([type])
+}
+
+// Fornecedores do cliente
+model ClientSupplier {
+  id                String   @id @default(cuid())
+  customerId        String   // Dono
+  
+  name              String
+  companyName       String?
+  document          String?  // CPF/CNPJ
+  email             String?
+  phone             String?
+  address           String?
+  notes             String?
+  isActive          Boolean  @default(true)
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  Customer          Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  @@index([customerId])
+  @@index([isActive])
+}
+
+// Clientes do assador (para controle de fiado)
+model ClientCustomer {
+  id                String   @id @default(cuid())
+  customerId        String   // Dono (assador)
+  
+  name              String
+  phone             String?
+  email             String?
+  address           String?
+  document          String?  // CPF
+  
+  // Controle de crédito
+  creditLimit       Float    @default(0)
+  currentDebt       Float    @default(0) // Dívida atual
+  
+  isActive          Boolean  @default(true)
+  notes             String?
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  Customer          Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  @@index([customerId])
+  @@index([isActive])
+}
+
+// ENUMS para Módulo de Gestão do Cliente
+
+enum ClientExpenseStatus {
+  PENDING
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum ClientIncomeStatus {
+  PENDING
+  RECEIVED
+  OVERDUE
+  CANCELLED
+}
+
+enum ClientTableStatus {
+  AVAILABLE   // Mesa disponível
+  OCCUPIED    // Mesa ocupada
+  RESERVED    // Mesa reservada
+  CLOSED      // Comanda fechada
+}
+
+enum ClientPaymentStatus {
+  PAID        // Pago
+  PENDING     // Pendente (fiado)
+  PARTIAL     // Parcial
+  CANCELLED   // Cancelado
+}
+
+enum ClientInventoryMovementType {
+  ENTRY       // Entrada
+  EXIT        // Saída
+  ADJUSTMENT  // Ajuste
+  LOSS        // Perda
+}
+
+enum ClientTransactionType {
+  INCOME      // Entrada
+  EXPENSE     // Saída
+  TRANSFER    // Transferência
+  ADJUSTMENT  // Ajuste
+}
+
+// ============================================
+// MÓDULO DE GESTÃO DE CARTÕES
+// ============================================
+
+// Configuração de taxas de cartão
+model CardFeeConfig {
+  id                String   @id @default(cuid())
+  
+  cardType          CardType // DEBIT ou CREDIT
+  feePercentage     Float    // Taxa em porcentagem (ex: 0.9 para 0,9%)
+  
+  isActive          Boolean  @default(true)
+  effectiveFrom     DateTime @default(now()) // Data de início da vigência
+  
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  @@index([cardType])
+  @@index([isActive])
+}
+
+// Transações com cartão (débito e crédito)
+model CardTransaction {
+  id                String              @id @default(cuid())
+  
+  orderId           String              // Pedido relacionado
+  customerId        String?             // Cliente que fez o pedido (opcional para vendas avulsas)
+  
+  cardType          CardType            // DEBIT ou CREDIT
+  grossAmount       Float               // Valor bruto da venda
+  feePercentage     Float               // Taxa aplicada no momento
+  feeAmount         Float               // Valor da taxa
+  netAmount         Float               // Valor líquido (após taxa)
+  
+  status            CardTransactionStatus @default(PENDING)
+  saleDate          DateTime            // Data da venda
+  expectedDate      DateTime            // Data esperada de recebimento (D+1 ou D+2)
+  receivedDate      DateTime?           // Data real de recebimento
+  
+  bankAccountId     String?             // Conta bancária (Itaú)
+  receivableId      String?             // Conta a receber criada
+  
+  notes             String?
+  
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  Order             Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  Customer          Customer?           @relation(fields: [customerId], references: [id])
+  BankAccount       BankAccount?        @relation(fields: [bankAccountId], references: [id])
+  Receivable        Receivable?         @relation(fields: [receivableId], references: [id])
+  
+  @@index([orderId])
+  @@index([customerId])
+  @@index([cardType])
+  @@index([status])
+  @@index([saleDate])
+  @@index([expectedDate])
+}
+
+// ENUMS para Módulo de Cartões
+
+enum CardType {
+  DEBIT
+  CREDIT
+}
+
+enum CardTransactionStatus {
+  PENDING           // Aguardando recebimento
+  RECEIVED          // Recebido
+  CANCELLED         // Cancelado
+}
+
+enum CustomerType {
+  NORMAL              // Cliente normal (revendedor)
+  CONSUMIDOR_FINAL    // Consumidor final (venda na loja - deve pagar na hora)
+  CASUAL              // Cliente casual (encomendas sem cadastro completo)
+  VAREJO              // Cliente varejo (perfil simplificado com pontos)
+}
+
+// ============================================
+// FIM MÓDULO DE GESTÃO DE CARTÕES
+// ============================================
+
+// ============================================
+// FIM MÓDULO DE GESTÃO DO CLIENTE
+// ============================================
+
+
+// ============================================
+// MÓDULO DE PRECIFICAÇÃO INDUSTRIAL
+// ============================================
+
+// Receitas de Produtos (para cálculo de custo real)
+model Recipe {
+  id                   String              @id @default(uuid())
+  productId            String              @unique // Vincula a um Product existente
+  name                 String              // Nome da receita (ex: "Espeto de Fraldinha")
+  description          String?             // Descrição opcional
+  yieldQuantity        Int                 @default(1) // Quantas unidades essa receita produz
+  isActive             Boolean             @default(true)
+  notes                String?             // Observações
+  lastCostUpdate       DateTime            @default(now()) // Última atualização de custo
+  profitMargin         Float?              // Margem de lucro calculada (%)
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+  
+  Product              Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  Ingredients          RecipeIngredient[]
+  Supplies             ProductionSupply[]
+  CostHistory          CostHistory[]
+  
+  @@index([productId])
+  @@index([isActive])
+}
+
+// Ingredientes das Receitas (com cálculo de quebras)
+model RecipeIngredient {
+  id                      String   @id @default(uuid())
+  recipeId                String
+  rawMaterialId           String   // Matéria-prima do estoque
+  quantityGrams           Float    // Quantidade em gramas por espeto
+  invisibleWastePercent   Float    @default(0) // % de quebra invisível (desidratação)
+  visibleWastePercent     Float    @default(0) // % de quebra visível (limpeza)
+  notes                   String?  // Observações
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+  
+  Recipe                  Recipe       @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  RawMaterial             RawMaterial  @relation(fields: [rawMaterialId], references: [id])
+  
+  @@index([recipeId])
+  @@index([rawMaterialId])
+}
+
+// Insumos de Produção (palitos, embalagens, temperos, etc.)
+model ProductionSupply {
+  id                String   @id @default(uuid())
+  recipeId          String?  // Opcional: pode ser vinculado a uma receita específica ou global
+  globalSupplyId    String?  // NOVO: Referência ao catálogo global de insumos
+  name              String   // Nome do insumo (ex: "Palito", "Embalagem")
+  category          String   // Categoria (ex: "EMBALAGEM", "TEMPERO", "PALITO")
+  costPerUnit       Float    // Custo por unidade
+  quantityPerUnit   Float    @default(1) // Quantidade usada por unidade produzida
+  unit              String   @default("un") // Unidade (un, kg, g, ml)
+  notes             String?
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  Recipe            Recipe?  @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  GlobalSupply      ProductionSupplyGlobal? @relation(fields: [globalSupplyId], references: [id], onDelete: SetNull)
+  
+  @@index([recipeId])
+  @@index([globalSupplyId])
+  @@index([category])
+  @@index([isActive])
+}
+
+// Catálogo Global de Insumos de Produção
+// Insumos reutilizáveis em várias receitas
+model ProductionSupplyGlobal {
+  id                String   @id @default(uuid())
+  name              String   // Nome do insumo (ex: "Palito Padrão 15cm", "Embalagem 100g")
+  category          String   // Categoria (ex: "EMBALAGEM", "TEMPERO", "PALITO", "OUTRO")
+  costPerUnit       Float    // Custo por unidade
+  unit              String   @default("un") // Unidade (un, kg, g, ml, l)
+  description       String?  // Descrição detalhada do insumo
+  notes             String?  // Observações adicionais
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  
+  // Receitas que usam este insumo
+  ProductionSupplies ProductionSupply[]
+  
+  @@index([category])
+  @@index([isActive])
+  @@map("production_supply_global")
+}
+
+// Histórico de Variações de Custo
+// Para rastrear mudanças nos custos de matérias-primas e receitas
+model CostHistory {
+  id              String   @id @default(uuid())
+  rawMaterialId   String?  // Se refere a matéria-prima
+  recipeId        String?  // Se refere a receita
+  oldCost         Float    // Custo anterior
+  newCost         Float    // Novo custo
+  reason          String   // "PURCHASE" (compra), "MANUAL_ADJUSTMENT" (ajuste manual), "INGREDIENT_CHANGE" (mudança de ingrediente)
+  purchaseId      String?  // Referência à compra que causou a mudança (se aplicável)
+  notes           String?  // Observações adicionais
+  createdAt       DateTime @default(now())
+  
+  RawMaterial     RawMaterial? @relation(fields: [rawMaterialId], references: [id], onDelete: SetNull)
+  Recipe          Recipe?      @relation(fields: [recipeId], references: [id], onDelete: SetNull)
+  
+  @@index([rawMaterialId])
+  @@index([recipeId])
+  @@index([createdAt])
+  @@map("cost_history")
+}
+
+// Histórico de Mudanças de Preço
+// Para rastrear alterações nos preços de venda dos produtos
+model PriceHistory {
+  id              String   @id @default(uuid())
+  productId       String   // Produto que teve o preço alterado
+  oldPrice        Float    // Preço anterior
+  newPrice        Float    // Novo preço
+  reason          String?  // Motivo da mudança (ex: "COST_INCREASE", "MARKET_ADJUSTMENT", "PROMOTION")
+  changedBy       String?  // Email do usuário que fez a mudança
+  notes           String?  // Observações adicionais
+  createdAt       DateTime @default(now())
+  
+  Product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  
+  @@index([productId])
+  @@index([createdAt])
+  @@map("price_history")
+}
+
+// ============================================
+// FIM MÓDULO DE PRECIFICAÇÃO INDUSTRIAL (ADMIN)
+// ============================================
+
+// ============================================
+// MÓDULO DE PRECIFICAÇÃO INDUSTRIAL (CLIENTE)
+// Estrutura idêntica ao admin, mas isolada por cliente
+// ============================================
+
+// Receitas do Cliente
+model ClientRecipe {
+  id                   String                    @id @default(uuid())
+  customerId           String                    // Cliente dono da receita
+  productId            String                    // Vincula a um ClientProduct
+  name                 String                    // Nome da receita (ex: "Espeto de Fraldinha")
+  description          String?                   // Descrição opcional
+  yieldQuantity        Int                       @default(1) // Quantas unidades essa receita produz
+  isActive             Boolean                   @default(true)
+  notes                String?                   // Observações
+  lastCostUpdate       DateTime                  @default(now()) // Última atualização de custo
+  profitMargin         Float?                    // Margem de lucro calculada (%)
+  createdAt            DateTime                  @default(now())
+  updatedAt            DateTime                  @updatedAt
+  
+  Customer             Customer                  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  Ingredients          ClientRecipeIngredient[]
+  Supplies             ClientProductionSupply[]
+  
+  @@index([customerId])
+  @@index([productId])
+  @@index([isActive])
+  @@map("client_recipe")
+}
+
+// Ingredientes das Receitas do Cliente (com cálculo de quebras)
+model ClientRecipeIngredient {
+  id                      String        @id @default(uuid())
+  recipeId                String
+  customerId              String        // Cliente dono
+  rawMaterialId           String        // ID da matéria-prima no estoque do cliente
+  rawMaterialName         String        // Nome da matéria-prima (para referência)
+  quantityGrams           Float         // Quantidade em gramas por unidade
+  invisibleWastePercent   Float         @default(0) // % de quebra invisível (desidratação)
+  visibleWastePercent     Float         @default(0) // % de quebra visível (limpeza)
+  costPerGram             Float         // Custo por grama no momento do cadastro
+  notes                   String?       // Observações
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+  
+  Recipe                  ClientRecipe  @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  Customer                Customer      @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  
+  @@index([recipeId])
+  @@index([customerId])
+  @@index([rawMaterialId])
+  @@map("client_recipe_ingredient")
+}
+
+// Insumos de Produção do Cliente (palitos, embalagens, temperos, etc.)
+model ClientProductionSupply {
+  id                String              @id @default(uuid())
+  recipeId          String?             // Opcional: vinculado a uma receita específica
+  customerId        String              // Cliente dono do insumo
+  globalSupplyId    String?             // Referência ao catálogo global do cliente
+  name              String              // Nome do insumo (ex: "Palito", "Embalagem")
+  category          String              // Categoria (ex: "EMBALAGEM", "TEMPERO", "PALITO")
+  costPerUnit       Float               // Custo por unidade
+  quantityPerUnit   Float               @default(1) // Quantidade usada por unidade produzida
+  unit              String              @default("un") // Unidade (un, kg, g, ml)
+  notes             String?
+  isActive          Boolean             @default(true)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  
+  Recipe            ClientRecipe?       @relation(fields: [recipeId], references: [id], onDelete: Cascade)
+  Customer          Customer            @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  GlobalSupply      ClientProductionSupplyGlobal? @relation(fields: [globalSupplyId], references: [id], onDelete: SetNull)
+  
+  @@index([recipeId])
+  @@index([customerId])
+  @@index([globalSupplyId])
+  @@index([category])
+  @@index([isActive])
+  @@map("client_production_supply")
+}
+
+// Catálogo Global de Insumos de Produção do Cliente
+// Insumos reutilizáveis em várias receitas do cliente
+model ClientProductionSupplyGlobal {
+  id                String                   @id @default(uuid())
+  customerId        String                   // Cliente dono do catálogo
+  name              String                   // Nome do insumo (ex: "Palito Padrão 15cm")
+  category          String                   // Categoria (ex: "EMBALAGEM", "TEMPERO", "PALITO", "OUTRO")
+  costPerUnit       Float                    // Custo por unidade
+  unit              String                   @default("un") // Unidade (un, kg, g, ml, l)
+  description       String?                  // Descrição detalhada do insumo
+  notes             String?                  // Observações adicionais
+  isActive          Boolean                  @default(true)
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  
+  Customer          Customer                 @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ProductionSupplies ClientProductionSupply[]
+  
+  @@index([customerId])
+  @@index([category])
+  @@index([isActive])
+  @@map("client_production_supply_global")
+}
+
+// ============================================
+// FIM MÓDULO DE PRECIFICAÇÃO INDUSTRIAL (CLIENTE)
+// ============================================
+// ============================================

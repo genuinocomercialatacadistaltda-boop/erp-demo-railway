@@ -1,0 +1,739 @@
+
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { Badge } from '@/components/ui/badge';
+import { Textarea } from '@/components/ui/textarea';
+import { toast } from 'sonner';
+import {
+  Upload,
+  FileText,
+  DollarSign,
+  Calendar,
+  CheckCircle2,
+  XCircle,
+  Eye,
+  Home,
+  ArrowLeft,
+  Plus,
+  Download,
+} from 'lucide-react';
+
+interface PayrollSheet {
+  id: string;
+  month: number;
+  year: number;
+  fileName: string;
+  fileUrl: string;
+  uploadedBy: string;
+  isProcessed: boolean;
+  processedAt: string | null;
+  notes: string | null;
+  createdAt: string;
+  payments: Payment[];
+}
+
+interface Payment {
+  id: string;
+  employeeId: string;
+  Employee: {
+    id: string;
+    name: string;
+    employeeNumber: string;
+  };
+  salaryAmount: number;
+  advanceAmount: number;
+  foodVoucherAmount: number;
+  bonusAmount: number;
+  totalAmount: number;
+  salaryDueDate: string;
+  advanceDueDate: string | null;
+  foodVoucherDueDate: string | null;
+  bonusDueDate: string | null;
+  isPaid: boolean;
+  paidAt: string | null;
+}
+
+interface Employee {
+  id: string;
+  name: string;
+  employeeNumber: string;
+  receivesAdvance: boolean;
+  foodVoucherAmount: number;
+}
+
+export default function PagamentosPage() {
+  const router = useRouter();
+  const { data: session, status } = useSession() || {};
+  
+  const [payrollSheets, setPayrollSheets] = useState<PayrollSheet[]>([]);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [showUploadDialog, setShowUploadDialog] = useState(false);
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false);
+  const [showDetailsDialog, setShowDetailsDialog] = useState(false);
+  const [selectedSheet, setSelectedSheet] = useState<PayrollSheet | null>(null);
+  
+  // Upload form
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadMonth, setUploadMonth] = useState('');
+  const [uploadYear, setUploadYear] = useState(new Date().getFullYear().toString());
+  const [uploadNotes, setUploadNotes] = useState('');
+  
+  // Payment form
+  const [paymentForm, setPaymentForm] = useState({
+    employeeId: '',
+    salaryAmount: '',
+    advanceAmount: '',
+    foodVoucherAmount: '',
+    bonusAmount: '',
+    notes: '',
+  });
+
+  useEffect(() => {
+    if (status === 'unauthenticated') {
+      router.push('/auth/login');
+      return;
+    }
+
+    if ((session?.user as any)?.userType !== 'ADMIN') {
+      router.push('/');
+      return;
+    }
+
+    loadData();
+  }, [session, status]);
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+
+      // Busca folhas de pagamento
+      const sheetsRes = await fetch('/api/hr/payroll-sheets');
+      if (sheetsRes.ok) {
+        const data = await sheetsRes.json();
+        setPayrollSheets(data);
+      }
+
+      // Busca funcionários
+      const employeesRes = await fetch('/api/hr/employees');
+      if (employeesRes.ok) {
+        const data = await employeesRes.json();
+        setEmployees(data.filter((e: Employee) => e));
+      }
+    } catch (error) {
+      console.error('Erro ao carregar dados:', error);
+      toast.error('Erro ao carregar dados');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleUploadPayroll = async () => {
+    if (!uploadFile || !uploadMonth || !uploadYear) {
+      toast.error('Preencha todos os campos obrigatórios');
+      return;
+    }
+
+    try {
+      setUploading(true);
+
+      const formData = new FormData();
+      formData.append('file', uploadFile);
+      formData.append('month', uploadMonth);
+      formData.append('year', uploadYear);
+      formData.append('notes', uploadNotes);
+
+      const response = await fetch('/api/hr/payroll-sheets', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Erro ao enviar folha de pagamento');
+      }
+
+      toast.success('Folha de pagamento enviada com sucesso!');
+      setShowUploadDialog(false);
+      resetUploadForm();
+      loadData();
+    } catch (error: any) {
+      console.error('Erro ao enviar folha:', error);
+      toast.error(error.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleManualPayment = async () => {
+    if (!paymentForm.employeeId || !paymentForm.salaryAmount) {
+      toast.error('Funcionário e salário são obrigatórios');
+      return;
+    }
+
+    try {
+      const employee = employees.find(e => e.id === paymentForm.employeeId);
+      if (!employee) {
+        toast.error('Funcionário não encontrado');
+        return;
+      }
+
+      const payments = [{
+        employeeId: paymentForm.employeeId,
+        salaryAmount: parseFloat(paymentForm.salaryAmount) || 0,
+        advanceAmount: parseFloat(paymentForm.advanceAmount) || 0,
+        foodVoucherAmount: parseFloat(paymentForm.foodVoucherAmount) || employee.foodVoucherAmount || 0,
+        bonusAmount: parseFloat(paymentForm.bonusAmount) || 0,
+        notes: paymentForm.notes,
+      }];
+
+      const response = await fetch('/api/hr/payments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ payments }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Erro ao registrar pagamento');
+      }
+
+      toast.success('Pagamento registrado com sucesso!');
+      setShowPaymentDialog(false);
+      resetPaymentForm();
+      loadData();
+    } catch (error: any) {
+      console.error('Erro ao registrar pagamento:', error);
+      toast.error(error.message);
+    }
+  };
+
+  const resetUploadForm = () => {
+    setUploadFile(null);
+    setUploadMonth('');
+    setUploadYear(new Date().getFullYear().toString());
+    setUploadNotes('');
+  };
+
+  const resetPaymentForm = () => {
+    setPaymentForm({
+      employeeId: '',
+      salaryAmount: '',
+      advanceAmount: '',
+      foodVoucherAmount: '',
+      bonusAmount: '',
+      notes: '',
+    });
+  };
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL',
+    }).format(value);
+  };
+
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('pt-BR');
+  };
+
+  const getMonthName = (month: number) => {
+    const months = [
+      'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+      'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+    ];
+    return months[month - 1] || '';
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-orange-500 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Carregando...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="container mx-auto p-6 max-w-7xl">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">
+            Pagamentos de Funcionários
+          </h1>
+          <p className="text-gray-500 mt-1">
+            Gerencie folhas de pagamento e pagamentos individuais
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => window.location.href = '/admin'}
+          >
+            <Home className="w-4 h-4 mr-2" />
+            Página Inicial
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => window.location.href = '/admin/rh'}
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Voltar
+          </Button>
+        </div>
+      </div>
+
+      {/* Action Buttons */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <Button
+          onClick={() => setShowUploadDialog(true)}
+          className="h-auto py-4"
+        >
+          <Upload className="w-5 h-5 mr-2" />
+          Upload de Folha de Pagamento (PDF)
+        </Button>
+        <Button
+          onClick={() => setShowPaymentDialog(true)}
+          variant="outline"
+          className="h-auto py-4"
+        >
+          <Plus className="w-5 h-5 mr-2" />
+          Lançamento Manual de Pagamento
+        </Button>
+      </div>
+
+      {/* Payroll Sheets List */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Folhas de Pagamento Enviadas</CardTitle>
+          <CardDescription>
+            Histórico de folhas de pagamento e seus status
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {payrollSheets.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              <FileText className="w-12 h-12 mx-auto mb-4 opacity-50" />
+              <p>Nenhuma folha de pagamento enviada ainda</p>
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Período</TableHead>
+                  <TableHead>Arquivo</TableHead>
+                  <TableHead>Data de Envio</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Pagamentos</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {payrollSheets.map((sheet) => (
+                  <TableRow key={sheet.id}>
+                    <TableCell className="font-medium">
+                      {getMonthName(sheet.month)}/{sheet.year}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-gray-400" />
+                        <span className="text-sm">{sheet.fileName}</span>
+                      </div>
+                    </TableCell>
+                    <TableCell>{formatDate(sheet.createdAt)}</TableCell>
+                    <TableCell>
+                      {sheet.isProcessed ? (
+                        <Badge variant="default" className="bg-green-500">
+                          <CheckCircle2 className="w-3 h-3 mr-1" />
+                          Processado
+                        </Badge>
+                      ) : (
+                        <Badge variant="secondary">
+                          <XCircle className="w-3 h-3 mr-1" />
+                          Aguardando
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {sheet.payments?.length || 0} pagamento(s)
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedSheet(sheet);
+                            setShowDetailsDialog(true);
+                          }}
+                        >
+                          <Eye className="w-4 h-4 mr-1" />
+                          Ver
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => window.open(sheet.fileUrl, '_blank')}
+                        >
+                          <Download className="w-4 h-4 mr-1" />
+                          PDF
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Upload Dialog */}
+      <Dialog open={showUploadDialog} onOpenChange={setShowUploadDialog}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Upload de Folha de Pagamento</DialogTitle>
+            <DialogDescription>
+              Envie o PDF da folha de pagamento do mês
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="month">Mês *</Label>
+              <Select value={uploadMonth} onValueChange={setUploadMonth}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o mês" />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
+                    <SelectItem key={m} value={m.toString()}>
+                      {getMonthName(m)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label htmlFor="year">Ano *</Label>
+              <Input
+                id="year"
+                type="number"
+                value={uploadYear}
+                onChange={(e) => setUploadYear(e.target.value)}
+                placeholder="2024"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="file">Arquivo PDF *</Label>
+              <Input
+                id="file"
+                type="file"
+                accept=".pdf"
+                onChange={(e) => setUploadFile(e.target.files?.[0] || null)}
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="notes">Observações</Label>
+              <Textarea
+                id="notes"
+                value={uploadNotes}
+                onChange={(e) => setUploadNotes(e.target.value)}
+                placeholder="Observações adicionais (opcional)"
+                rows={3}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowUploadDialog(false);
+                  resetUploadForm();
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button
+                onClick={handleUploadPayroll}
+                disabled={uploading}
+              >
+                {uploading ? 'Enviando...' : 'Enviar Folha'}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manual Payment Dialog */}
+      <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Lançamento Manual de Pagamento</DialogTitle>
+            <DialogDescription>
+              Registre um pagamento individual para um funcionário
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label htmlFor="employee">Funcionário *</Label>
+              <Select
+                value={paymentForm.employeeId}
+                onValueChange={(value) =>
+                  setPaymentForm({ ...paymentForm, employeeId: value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione o funcionário" />
+                </SelectTrigger>
+                <SelectContent>
+                  {employees.map((emp) => (
+                    <SelectItem key={emp.id} value={emp.id}>
+                      {emp.name} - {emp.employeeNumber}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="salaryAmount">Salário *</Label>
+                <Input
+                  id="salaryAmount"
+                  type="number"
+                  step="0.01"
+                  value={paymentForm.salaryAmount}
+                  onChange={(e) =>
+                    setPaymentForm({ ...paymentForm, salaryAmount: e.target.value })
+                  }
+                  placeholder="0,00"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="advanceAmount">Antecipação (40%)</Label>
+                <Input
+                  id="advanceAmount"
+                  type="number"
+                  step="0.01"
+                  value={paymentForm.advanceAmount}
+                  onChange={(e) =>
+                    setPaymentForm({ ...paymentForm, advanceAmount: e.target.value })
+                  }
+                  placeholder="0,00"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="foodVoucherAmount">Vale Alimentação</Label>
+                <Input
+                  id="foodVoucherAmount"
+                  type="number"
+                  step="0.01"
+                  value={paymentForm.foodVoucherAmount}
+                  onChange={(e) =>
+                    setPaymentForm({
+                      ...paymentForm,
+                      foodVoucherAmount: e.target.value,
+                    })
+                  }
+                  placeholder="0,00"
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="bonusAmount">Premiação</Label>
+                <Input
+                  id="bonusAmount"
+                  type="number"
+                  step="0.01"
+                  value={paymentForm.bonusAmount}
+                  onChange={(e) =>
+                    setPaymentForm({ ...paymentForm, bonusAmount: e.target.value })
+                  }
+                  placeholder="0,00"
+                />
+              </div>
+            </div>
+
+            <div>
+              <Label htmlFor="payment-notes">Observações</Label>
+              <Textarea
+                id="payment-notes"
+                value={paymentForm.notes}
+                onChange={(e) =>
+                  setPaymentForm({ ...paymentForm, notes: e.target.value })
+                }
+                placeholder="Observações adicionais (opcional)"
+                rows={3}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowPaymentDialog(false);
+                  resetPaymentForm();
+                }}
+              >
+                Cancelar
+              </Button>
+              <Button onClick={handleManualPayment}>
+                Registrar Pagamento
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Details Dialog */}
+      <Dialog open={showDetailsDialog} onOpenChange={setShowDetailsDialog}>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Detalhes da Folha - {selectedSheet && getMonthName(selectedSheet.month)}/
+              {selectedSheet?.year}
+            </DialogTitle>
+            <DialogDescription>
+              Pagamentos registrados nesta folha
+            </DialogDescription>
+          </DialogHeader>
+          {selectedSheet && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4 p-4 bg-gray-50 rounded-lg">
+                <div>
+                  <p className="text-sm text-gray-500">Arquivo</p>
+                  <p className="font-medium">{selectedSheet.fileName}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Status</p>
+                  <div className="mt-1">
+                    {selectedSheet.isProcessed ? (
+                      <Badge variant="default" className="bg-green-500">
+                        Processado
+                      </Badge>
+                    ) : (
+                      <Badge variant="secondary">Aguardando</Badge>
+                    )}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Data de Envio</p>
+                  <p className="font-medium">{formatDate(selectedSheet.createdAt)}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Total de Pagamentos</p>
+                  <p className="font-medium">{selectedSheet.payments?.length || 0}</p>
+                </div>
+              </div>
+
+              {selectedSheet.notes && (
+                <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <p className="text-sm font-medium text-yellow-800">Observações:</p>
+                  <p className="text-sm text-yellow-700 mt-1">{selectedSheet.notes}</p>
+                </div>
+              )}
+
+              {selectedSheet.payments && selectedSheet.payments.length > 0 && (
+                <div>
+                  <h3 className="text-lg font-semibold mb-3">Pagamentos</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Funcionário</TableHead>
+                        <TableHead className="text-right">Salário</TableHead>
+                        <TableHead className="text-right">Antecipação</TableHead>
+                        <TableHead className="text-right">Vale Alim.</TableHead>
+                        <TableHead className="text-right">Premiação</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {selectedSheet.payments.map((payment) => (
+                        <TableRow key={payment.id}>
+                          <TableCell className="font-medium">
+                            {payment.Employee.name}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(payment.salaryAmount)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(payment.advanceAmount)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(payment.foodVoucherAmount)}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {formatCurrency(payment.bonusAmount)}
+                          </TableCell>
+                          <TableCell className="text-right font-semibold">
+                            {formatCurrency(payment.totalAmount)}
+                          </TableCell>
+                          <TableCell>
+                            {payment.isPaid ? (
+                              <Badge variant="default" className="bg-green-500">
+                                Pago
+                              </Badge>
+                            ) : (
+                              <Badge variant="secondary">Pendente</Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

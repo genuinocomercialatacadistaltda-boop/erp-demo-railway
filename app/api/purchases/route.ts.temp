@@ -1,0 +1,603 @@
+
+import { NextRequest, NextResponse } from 'next/server';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth-options';
+import { prisma } from '@/lib/db';
+
+// GET - Listar todas as compras
+export async function GET(req: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session || !session.user || (session.user as any).userType !== 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Acesso negado' },
+        { status: 403 }
+      );
+    }
+
+    const { searchParams } = new URL(req.url);
+    const status = searchParams.get('status');
+    const supplierId = searchParams.get('supplierId');
+    const startDate = searchParams.get('startDate');
+    const endDate = searchParams.get('endDate');
+
+    const where: any = {
+      customerId: null // 🏭 Apenas compras da fábrica/admin (não dos clientes)
+    };
+    
+    if (status) {
+      where.status = status;
+    }
+    
+    if (supplierId) {
+      where.supplierId = supplierId;
+    }
+    
+    if (startDate || endDate) {
+      where.purchaseDate = {};
+      if (startDate) {
+        where.purchaseDate.gte = new Date(startDate);
+      }
+      if (endDate) {
+        where.purchaseDate.lte = new Date(endDate);
+      }
+    }
+
+    const purchases = await prisma.purchase.findMany({
+      where,
+      include: {
+        Supplier: {
+          select: {
+            id: true,
+            name: true,
+            document: true,
+            phone: true,
+          },
+        },
+        BankAccount: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+        PurchaseItem: {
+          include: {
+            RawMaterial: {
+              select: {
+                id: true,
+                name: true,
+                measurementUnit: true,
+              },
+            },
+          },
+        },
+        PurchaseSupplyItems: {
+          include: {
+            Supply: {
+              select: {
+                id: true,
+                name: true,
+                unit: true,
+                category: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        purchaseDate: 'desc',
+      },
+    });
+
+    // Mapear os dados para o formato esperado pelo frontend
+    const mappedPurchases = purchases.map((purchase: any) => ({
+      id: purchase.id,
+      supplier: purchase.Supplier || { id: '', name: 'Fornecedor não encontrado' },
+      bankAccount: purchase.BankAccount || { id: '', name: 'Conta não encontrada' },
+      totalAmount: purchase.totalAmount,
+      status: purchase.status,
+      paymentMethod: purchase.paymentMethod || '',
+      purchaseDate: purchase.purchaseDate,
+      dueDate: purchase.dueDate,
+      paidAt: purchase.paymentDate, // Corrigido: era paymentDate no schema
+      notes: purchase.notes,
+      items: purchase.PurchaseItem.map((item: any) => ({
+        id: item.id,
+        material: {
+          id: item.RawMaterial.id,
+          name: item.RawMaterial.name,
+          sku: '', // Adicionar se necessário
+          unit: item.RawMaterial.measurementUnit,
+        },
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })),
+      supplyItems: purchase.PurchaseSupplyItems.map((item: any) => ({
+        id: item.id,
+        supply: {
+          id: item.Supply.id,
+          name: item.Supply.name,
+          unit: item.Supply.unit,
+          category: item.Supply.category,
+        },
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+      })),
+      createdAt: purchase.createdAt,
+    }));
+
+    return NextResponse.json(mappedPurchases);
+  } catch (error) {
+    console.error('Erro ao buscar compras:', error);
+    return NextResponse.json(
+      { error: 'Erro ao buscar compras' },
+      { status: 500 }
+    );
+  }
+}
+
+// POST - Criar nova compra
+export async function POST(req: NextRequest) {
+  try {
+    console.log("🎯 POST /api/purchases CHAMADO");
+    
+    const session = await getServerSession(authOptions);
+    
+    if (!session || !session.user || (session.user as any).userType !== 'ADMIN') {
+      console.log("❌ Acesso negado - usuário não é ADMIN");
+      return NextResponse.json(
+        { error: 'Acesso negado' },
+        { status: 403 }
+      );
+    }
+
+    console.log("✅ Usuário autenticado:", (session.user as any).email);
+
+    const body = await req.json();
+    console.log("📦 Body recebido:", JSON.stringify(body, null, 2));
+    
+    const {
+      supplierId,
+      items,
+      supplyItems, // 🆕 Insumos
+      purchaseDate,
+      dueDate,
+      paymentMethod,
+      bankAccountId,
+      creditCardId, // 💳 Cartão de crédito
+      installments = 1, // 💳 Número de parcelas
+      invoiceNumber,
+      invoiceUrl,
+      notes,
+      taxAmount = 0, // 🆕 Valor do imposto da nota
+      expenseType = 'RAW_MATERIALS',
+      status = 'PENDING',
+    } = body;
+    
+    console.log("📋 Dados extraídos:", {
+      supplierId,
+      itemsCount: items?.length,
+      supplyItemsCount: supplyItems?.length, // 🆕
+      purchaseDate,
+      dueDate,
+      paymentMethod,
+      bankAccountId,
+      taxAmount, // 🆕
+      status,
+      expenseType
+    });
+
+    // Validações
+    if (!supplierId) {
+      return NextResponse.json(
+        { error: 'Fornecedor é obrigatório' },
+        { status: 400 }
+      );
+    }
+
+    // 💳 Validar cartão de crédito se for o método de pagamento
+    if (paymentMethod === 'CARTAO_CREDITO' && !creditCardId) {
+      return NextResponse.json(
+        { error: 'Cartão de crédito é obrigatório para compras no cartão' },
+        { status: 400 }
+      );
+    }
+
+    // Validar que há pelo menos matérias-primas OU insumos
+    if ((!items || items.length === 0) && (!supplyItems || supplyItems.length === 0)) {
+      return NextResponse.json(
+        { error: 'Adicione pelo menos um item (matéria-prima ou insumo) à compra' },
+        { status: 400 }
+      );
+    }
+
+    if (!dueDate) {
+      return NextResponse.json(
+        { error: 'Data de vencimento é obrigatória' },
+        { status: 400 }
+      );
+    }
+
+    // Calcular total (matérias-primas + insumos + impostos)
+    const rawMaterialsTotal = (items || []).reduce((sum: number, item: any) => {
+      return sum + (item.quantity * item.unitPrice);
+    }, 0);
+    
+    const suppliesTotal = (supplyItems || []).reduce((sum: number, item: any) => {
+      return sum + (item.quantity * item.unitPrice);
+    }, 0);
+    
+    const totalAmount = rawMaterialsTotal + suppliesTotal + (taxAmount || 0);
+    
+    console.log("💰 Totais calculados:", {
+      rawMaterialsTotal,
+      suppliesTotal,
+      taxAmount: taxAmount || 0,
+      totalAmount
+    });
+
+    // Gerar número da compra
+    const lastPurchase = await prisma.purchase.findFirst({
+      orderBy: { createdAt: 'desc' },
+    });
+
+    const purchaseCount = lastPurchase 
+      ? parseInt(lastPurchase.purchaseNumber.split('-')[2]) + 1 
+      : 1;
+    
+    const now = new Date();
+    const purchaseNumber = `COMP-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}-${String(purchaseCount).padStart(4, '0')}`;
+
+    // 💳 VALIDAÇÃO PRÉVIA: Verificar se cartão existe (sem bloquear por limite)
+    if (paymentMethod === 'CARTAO_CREDITO' && creditCardId) {
+      const cardValidation = await prisma.creditCard.findUnique({
+        where: { id: creditCardId }
+      });
+
+      if (!cardValidation) {
+        return NextResponse.json(
+          { error: 'Cartão não encontrado' },
+          { status: 404 }
+        );
+      }
+
+      // ⚠️ AVISO: Não bloqueamos compra por limite insuficiente
+      const currentAvailable = cardValidation.availableLimit || cardValidation.limit;
+      if (cardValidation.limit && cardValidation.limit > 0 && currentAvailable < totalAmount) {
+        console.warn(`⚠️ ALERTA: Compra de R$ ${totalAmount.toFixed(2)} excede limite disponível de R$ ${currentAvailable.toFixed(2)}`);
+        console.warn(`⚠️ Cartão: ${cardValidation.name} - Permitindo compra mesmo assim`);
+      }
+    }
+
+    // Criar compra em transação
+    console.log("🔄 Iniciando transação...");
+    
+    const purchase = await prisma.$transaction(async (tx: any) => {
+      console.log("🔍 Buscando ou criando categoria 'Compra de Mercadoria'...");
+      
+      // Buscar ou criar categoria "Compra de Mercadoria"
+      let category = await tx.expenseCategory.findFirst({
+        where: { name: 'Compra de Mercadoria' },
+      });
+
+      if (!category) {
+        console.log("📝 Categoria não encontrada, criando nova...");
+        category = await tx.expenseCategory.create({
+          data: {
+            name: 'Compra de Mercadoria',
+            description: 'Compras de matérias-primas e produtos',
+            color: '#10b981',
+            isActive: true,
+          },
+        });
+        console.log("✅ Categoria criada:", category.id);
+      } else {
+        console.log("✅ Categoria encontrada:", category.id);
+      }
+
+      // Buscar nome do fornecedor
+      console.log("🔍 Buscando fornecedor:", supplierId);
+      const supplier = await tx.supplier.findUnique({
+        where: { id: supplierId },
+      });
+      
+      if (!supplier) {
+        console.log("❌ Fornecedor não encontrado:", supplierId);
+        throw new Error(`Fornecedor com ID ${supplierId} não encontrado`);
+      }
+      console.log("✅ Fornecedor encontrado:", supplier.name);
+
+      // 💳 NÃO criar despesa para cartão de crédito (já foi criada nas faturas)
+      let expense = null;
+      
+      if (paymentMethod !== 'CARTAO_CREDITO') {
+        // Criar a despesa no financeiro PRIMEIRO (apenas para outros métodos)
+        console.log("💰 Criando despesa no financeiro...");
+        console.log("Dados da despesa:", {
+          description: `Compra de Mercadoria - ${supplier.name}`,
+          amount: totalAmount,
+          categoryId: category.id,
+          bankAccountId: bankAccountId || null,
+          supplierId: supplierId,
+          dueDate: new Date(dueDate),
+          status: status,
+          expenseType: expenseType,
+          paymentMethod: paymentMethod
+        });
+        
+        expense = await tx.expense.create({
+          data: {
+            description: `Compra de Mercadoria - ${supplier.name}`,
+            amount: totalAmount,
+            categoryId: category.id,
+            bankAccountId: bankAccountId || null,
+            supplierId: supplierId,
+            dueDate: new Date(dueDate),
+            paymentDate: status === 'PAID' ? new Date() : null,
+            status: status,
+            expenseType: expenseType,
+            paymentMethod: paymentMethod,
+            notes: notes,
+            referenceNumber: invoiceNumber,
+            attachmentUrl: invoiceUrl,
+            createdBy: (session.user as any).email,
+          },
+        });
+
+        console.log('✅ Despesa criada automaticamente:', expense.id);
+      } else {
+        console.log('💳 Cartão de crédito - Despesas já criadas nas faturas, pulando despesa normal');
+      }
+
+      // Criar a compra vinculada à despesa (se existir)
+      console.log("📦 Criando compra...");
+      console.log("Dados da compra:", {
+        purchaseNumber,
+        supplierId,
+        totalAmount,
+        status,
+        expenseType,
+        purchaseDate: purchaseDate ? new Date(purchaseDate) : new Date(),
+        dueDate: new Date(dueDate),
+        paymentMethod,
+        bankAccountId,
+        expenseId: expense?.id || null, // 💳 null para cartão de crédito
+        itemsCount: items.length
+      });
+      
+      const newPurchase = await tx.purchase.create({
+        data: {
+          purchaseNumber,
+          supplierId,
+          customerId: null, // 🏭 Compra da fábrica/admin (não do cliente)
+          totalAmount,
+          taxAmount: taxAmount || 0, // 🆕 Valor do imposto da nota
+          status,
+          expenseType,
+          purchaseDate: purchaseDate ? new Date(purchaseDate) : new Date(),
+          dueDate: new Date(dueDate),
+          paymentDate: status === 'PAID' ? new Date() : null,
+          paymentMethod,
+          bankAccountId,
+          expenseId: expense?.id || null, // 💳 null para cartão de crédito (despesas nas faturas)
+          invoiceNumber,
+          invoiceUrl,
+          notes,
+          createdBy: (session.user as any).email,
+          paidBy: status === 'PAID' ? (session.user as any).email : null,
+          PurchaseItem: items && items.length > 0 ? {
+            create: items.map((item: any) => ({
+              rawMaterialId: item.rawMaterialId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              totalPrice: item.quantity * item.unitPrice,
+              notes: item.notes,
+            })),
+          } : undefined,
+          PurchaseSupplyItems: supplyItems && supplyItems.length > 0 ? {
+            create: supplyItems.map((item: any) => ({
+              supplyId: item.supplyId,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              totalPrice: item.quantity * item.unitPrice,
+              notes: item.notes,
+            })),
+          } : undefined,
+        },
+        include: {
+          Supplier: true,
+          BankAccount: true,
+          Expense: {
+            include: {
+              Category: true,
+            },
+          },
+          PurchaseItem: {
+            include: {
+              RawMaterial: true,
+            },
+          },
+          PurchaseSupplyItems: {
+            include: {
+              Supply: true,
+            },
+          },
+        },
+      });
+
+      if (expense) {
+        console.log('✅ Compra criada e vinculada à despesa:', newPurchase.id, '→', expense.id);
+      } else {
+        console.log('✅ Compra criada (sem despesa normal - cartão de crédito):', newPurchase.id);
+      }
+
+      // Atualizar estoque das matérias-primas e registrar mudanças de custo
+      console.log("📊 Atualizando estoque das matérias-primas...");
+      for (const item of (items || [])) {
+        console.log(`Atualizando matéria-prima ${item.rawMaterialId}: +${item.quantity}`);
+        
+        // Buscar custo atual antes da atualização
+        const currentMaterial = await tx.rawMaterial.findUnique({
+          where: { id: item.rawMaterialId },
+          select: { costPerUnit: true, name: true },
+        });
+        
+        const oldCost = currentMaterial?.costPerUnit || 0;
+        const newCost = item.unitPrice;
+        
+        // Atualizar matéria-prima
+        await tx.rawMaterial.update({
+          where: { id: item.rawMaterialId },
+          data: {
+            currentStock: {
+              increment: item.quantity,
+            },
+            costPerUnit: newCost,
+          },
+        });
+        
+        // Registrar mudança de custo se houve alteração
+        if (Math.abs(oldCost - newCost) > 0.01) {
+          console.log(`💰 Custo alterado: ${currentMaterial?.name} ${oldCost} → ${newCost}`);
+          
+          await tx.costHistory.create({
+            data: {
+              rawMaterialId: item.rawMaterialId,
+              oldCost,
+              newCost,
+              reason: 'PURCHASE',
+              purchaseId: newPurchase.id,
+              notes: `Compra ${purchaseNumber} - ${supplier.name}`,
+            },
+          });
+          
+          // Buscar receitas que usam esta matéria-prima
+          const affectedRecipes = await tx.recipe.findMany({
+            where: {
+              Ingredients: {
+                some: {
+                  rawMaterialId: item.rawMaterialId,
+                },
+              },
+            },
+            select: { id: true },
+          });
+          
+          // Atualizar lastCostUpdate das receitas afetadas
+          if (affectedRecipes.length > 0) {
+            console.log(`📋 Atualizando ${affectedRecipes.length} receita(s) que usam ${currentMaterial?.name}`);
+            
+            await tx.recipe.updateMany({
+              where: {
+                id: {
+                  in: affectedRecipes.map((r: any) => r.id),
+                },
+              },
+              data: {
+                lastCostUpdate: new Date(),
+              },
+            });
+          }
+        }
+      }
+      console.log("✅ Estoque de matérias-primas atualizado");
+
+      // 🆕 Atualizar estoque dos insumos
+      console.log("📦 Atualizando estoque dos insumos...");
+      for (const item of (supplyItems || [])) {
+        console.log(`Atualizando insumo ${item.supplyId}: +${item.quantity}`);
+        
+        // Buscar custo atual do insumo antes da atualização
+        const currentSupply = await tx.productionSupplyGlobal.findUnique({
+          where: { id: item.supplyId },
+          select: { costPerUnit: true, name: true, currentStock: true },
+        });
+        
+        const oldCost = currentSupply?.costPerUnit || 0;
+        const newCost = item.unitPrice;
+        
+        // Atualizar insumo (estoque e custo)
+        const updatedSupply = await tx.productionSupplyGlobal.update({
+          where: { id: item.supplyId },
+          data: {
+            currentStock: {
+              increment: item.quantity,
+            },
+            costPerUnit: newCost,
+          },
+        });
+        
+        // Registrar movimentação de estoque do insumo
+        await tx.supplyMovement.create({
+          data: {
+            supplyId: item.supplyId,
+            type: 'IN',
+            quantity: item.quantity,
+            reason: 'PURCHASE',
+            reference: newPurchase.id,
+            notes: `Compra ${purchaseNumber} - ${supplier.name}`,
+            createdBy: (session.user as any).email,
+          },
+        });
+        
+        console.log(`✅ Insumo atualizado: ${currentSupply?.name} - Estoque: ${currentSupply?.currentStock} → ${updatedSupply.currentStock}, Custo: R$ ${oldCost.toFixed(2)} → R$ ${newCost.toFixed(2)}`);
+      }
+      console.log("✅ Estoque de insumos atualizado");
+
+      // Se já foi pago, registrar transação bancária (exceto cartão de crédito)
+      if (status === 'PAID' && bankAccountId && paymentMethod !== 'CARTAO_CREDITO') {
+        // Deduzir do saldo da conta bancária
+        const updatedAccount = await tx.bankAccount.update({
+          where: { id: bankAccountId },
+          data: {
+            balance: {
+              decrement: totalAmount,
+            },
+          },
+        });
+
+        // Registrar transação
+        await tx.transaction.create({
+          data: {
+            bankAccountId,
+            type: 'EXPENSE',
+            amount: totalAmount,
+            description: `Compra ${purchaseNumber} - ${supplier?.name || 'Fornecedor'}`,
+            referenceId: newPurchase.id,
+            referenceType: 'PURCHASE',
+            category: expenseType,
+            date: new Date(),
+            balanceAfter: updatedAccount.balance,
+            createdBy: (session.user as any).email,
+          },
+        });
+
+        console.log('💳 Transação bancária registrada para compra paga');
+      } else if (paymentMethod === 'CARTAO_CREDITO') {
+        console.log('💳 Compra no cartão - transação bancária não registrada (será paga na fatura)');
+      }
+
+      return newPurchase;
+    });
+
+    console.log("🎉 Compra criada com sucesso!");
+    return NextResponse.json(purchase, { status: 201 });
+  } catch (error: any) {
+    console.error('💥 ERRO AO CRIAR COMPRA:', error);
+    console.error('Stack trace:', error?.stack);
+    console.error('Mensagem:', error?.message);
+    console.error('Código:', error?.code);
+    console.error('Meta:', error?.meta);
+    
+    // Retornar erro mais detalhado
+    return NextResponse.json(
+      { 
+        error: 'Erro ao criar compra',
+        details: error?.message || 'Erro desconhecido',
+        code: error?.code
+      },
+      { status: 500 }
+    );
+  }
+}

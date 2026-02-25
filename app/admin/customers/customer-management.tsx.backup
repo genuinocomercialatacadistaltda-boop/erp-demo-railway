@@ -1,0 +1,554 @@
+
+'use client'
+
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import Link from 'next/link'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Flame, ArrowLeft, Plus, Pencil, Trash2, Users, Search, DollarSign, CreditCard } from 'lucide-react'
+import { toast } from 'sonner'
+
+interface Customer {
+  id: string
+  name: string
+  email: string
+  phone: string
+  cpfCnpj: string
+  city: string
+  address: string | null
+  creditLimit: number
+  availableCredit: number
+  customDiscount: number
+  paymentTerms: number
+  allowInstallments: boolean
+  installmentOptions: string | null
+  createdAt: string
+  updatedAt: string
+  user: any
+  orders: Array<{ id: string; total: number }>
+}
+
+interface CustomerManagementProps {
+  customers: Customer[]
+}
+
+export function CustomerManagement({ customers: initialCustomers }: CustomerManagementProps) {
+  const router = useRouter()
+  const [customers, setCustomers] = useState(initialCustomers)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [isDialogOpen, setIsDialogOpen] = useState(false)
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    cpfCnpj: '',
+    city: '',
+    address: '',
+    creditLimit: '',
+    customDiscount: '',
+    paymentTerms: '',
+    allowInstallments: false,
+    installmentOptions: [] as string[],
+    password: ''
+  })
+
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL'
+    }).format(value)
+  }
+
+  const filteredCustomers = customers.filter(customer =>
+    customer.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    customer.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    customer.city.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  const handleEdit = (customer: Customer) => {
+    setEditingCustomer(customer)
+    setFormData({
+      name: customer.name,
+      email: customer.email,
+      phone: customer.phone,
+      cpfCnpj: customer.cpfCnpj,
+      city: customer.city,
+      address: customer.address || '',
+      creditLimit: customer.creditLimit.toString(),
+      customDiscount: customer.customDiscount.toString(),
+      paymentTerms: customer.paymentTerms.toString(),
+      allowInstallments: customer.allowInstallments || false,
+      installmentOptions: customer.installmentOptions ? customer.installmentOptions.split(',') : [],
+      password: ''
+    })
+    setIsDialogOpen(true)
+  }
+
+  const handleAdd = () => {
+    setEditingCustomer(null)
+    setFormData({
+      name: '',
+      email: '',
+      phone: '',
+      cpfCnpj: '',
+      city: '',
+      address: '',
+      creditLimit: '1000',
+      customDiscount: '0',
+      paymentTerms: '30',
+      allowInstallments: false,
+      installmentOptions: [],
+      password: ''
+    })
+    setIsDialogOpen(true)
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsSubmitting(true)
+
+    try {
+      const url = editingCustomer
+        ? `/api/customers/${editingCustomer.id}`
+        : '/api/customers'
+
+      const method = editingCustomer ? 'PUT' : 'POST'
+
+      const payload = {
+        ...formData,
+        creditLimit: parseFloat(formData.creditLimit),
+        customDiscount: parseInt(formData.customDiscount),
+        paymentTerms: parseInt(formData.paymentTerms),
+        allowInstallments: formData.allowInstallments,
+        installmentOptions: formData.installmentOptions.length > 0 ? formData.installmentOptions.join(',') : null
+      }
+
+      // Remove password if empty (for edit)
+      if (!payload.password) {
+        delete (payload as any).password
+      }
+
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+
+      if (!response.ok) throw new Error('Erro ao salvar cliente')
+
+      toast.success(editingCustomer ? 'Cliente atualizado!' : 'Cliente criado!')
+      setIsDialogOpen(false)
+      router.refresh()
+    } catch (error) {
+      toast.error('Erro ao salvar cliente')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Tem certeza que deseja excluir este cliente?')) return
+
+    try {
+      const response = await fetch(`/api/customers/${id}`, {
+        method: 'DELETE'
+      })
+
+      if (!response.ok) throw new Error('Erro ao excluir cliente')
+
+      toast.success('Cliente excluído!')
+      setCustomers(customers.filter(c => c.id !== id))
+    } catch (error) {
+      toast.error('Erro ao excluir cliente')
+    }
+  }
+
+  const getTotalSpent = (customer: Customer) => {
+    return customer.orders.reduce((sum, order) => sum + order.total, 0)
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-red-50 via-orange-50 to-amber-50">
+      {/* Header */}
+      <header className="sticky top-0 z-50 w-full border-b bg-white/80 backdrop-blur-sm">
+        <div className="container mx-auto max-w-7xl flex h-16 items-center justify-between px-4">
+          <Link href="/admin" className="flex items-center space-x-3">
+            <Button variant="ghost" size="sm">
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <div className="w-10 h-10 bg-red-600 rounded-lg flex items-center justify-center">
+              <Flame className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900">Gerenciar Clientes</h1>
+              <p className="text-xs text-gray-600">Espetos Genuíno</p>
+            </div>
+          </Link>
+
+          <Button onClick={handleAdd} className="bg-red-600 hover:bg-red-700">
+            <Plus className="w-4 h-4 mr-2" />
+            Novo Cliente
+          </Button>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="container mx-auto max-w-7xl px-4 py-8">
+        {/* Search */}
+        <Card className="mb-6">
+          <CardContent className="pt-6">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 w-5 h-5" />
+              <Input
+                placeholder="Buscar clientes por nome, email ou cidade..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10"
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Customers List */}
+        <div className="space-y-4">
+          {filteredCustomers.map((customer) => (
+            <Card key={customer.id} className="hover:shadow-lg transition-shadow">
+              <CardContent className="p-6">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                  {/* Customer Info */}
+                  <div className="flex-1">
+                    <div className="flex items-start justify-between mb-4">
+                      <div>
+                        <h3 className="text-lg font-bold text-gray-900">{customer.name}</h3>
+                        <p className="text-sm text-gray-600">{customer.email}</p>
+                        <p className="text-sm text-gray-600">{customer.phone}</p>
+                      </div>
+                      <Badge variant="secondary">{customer.cpfCnpj}</Badge>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div>
+                        <p className="text-xs text-gray-500">Cidade</p>
+                        <p className="text-sm font-medium">{customer.city}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Pedidos</p>
+                        <p className="text-sm font-medium">{customer.orders.length}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Total Gasto</p>
+                        <p className="text-sm font-medium text-green-600">
+                          {formatCurrency(getTotalSpent(customer))}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-500">Prazo</p>
+                        <p className="text-sm font-medium">{customer.paymentTerms} dias</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Credit Info */}
+                  <div className="flex flex-col gap-3 lg:min-w-[300px]">
+                    <div className="flex items-center justify-between p-3 bg-blue-50 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <CreditCard className="w-4 h-4 text-blue-600" />
+                        <span className="text-sm text-gray-600">Limite</span>
+                      </div>
+                      <span className="font-bold text-blue-600">
+                        {formatCurrency(customer.creditLimit)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between p-3 bg-green-50 rounded-lg">
+                      <div className="flex items-center gap-2">
+                        <DollarSign className="w-4 h-4 text-green-600" />
+                        <span className="text-sm text-gray-600">Disponível</span>
+                      </div>
+                      <span className="font-bold text-green-600">
+                        {formatCurrency(customer.availableCredit)}
+                      </span>
+                    </div>
+
+                    {customer.customDiscount > 0 && (
+                      <div className="flex items-center justify-between p-3 bg-orange-50 rounded-lg">
+                        <span className="text-sm text-gray-600">Desconto</span>
+                        <span className="font-bold text-orange-600">
+                          {customer.customDiscount}%
+                        </span>
+                      </div>
+                    )}
+
+                    <div className="flex gap-2 pt-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleEdit(customer)}
+                        className="flex-1"
+                      >
+                        <Pencil className="w-4 h-4 mr-2" />
+                        Editar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDelete(customer.id)}
+                        className="text-red-600 hover:text-red-700"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+
+        {filteredCustomers.length === 0 && (
+          <Card className="p-12">
+            <div className="text-center">
+              <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 mb-2">
+                Nenhum cliente encontrado
+              </h3>
+              <p className="text-gray-600 mb-6">
+                {searchTerm ? 'Tente uma busca diferente' : 'Comece adicionando seu primeiro cliente'}
+              </p>
+              <Button onClick={handleAdd} className="bg-red-600 hover:bg-red-700">
+                <Plus className="w-4 h-4 mr-2" />
+                Adicionar Cliente
+              </Button>
+            </div>
+          </Card>
+        )}
+      </main>
+
+      {/* Add/Edit Dialog */}
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              {editingCustomer ? 'Editar Cliente' : 'Novo Cliente'}
+            </DialogTitle>
+            <DialogDescription>
+              Preencha as informações do cliente
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="name">Nome Completo *</Label>
+                <Input
+                  id="name"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="cpfCnpj">CPF/CNPJ *</Label>
+                <Input
+                  id="cpfCnpj"
+                  value={formData.cpfCnpj}
+                  onChange={(e) => setFormData({ ...formData, cpfCnpj: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="email">E-mail *</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="phone">Telefone *</Label>
+                <Input
+                  id="phone"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  placeholder="(63) 99999-9999"
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label htmlFor="city">Cidade *</Label>
+                <Input
+                  id="city"
+                  value={formData.city}
+                  onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="address">Endereço</Label>
+                <Input
+                  id="address"
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <Label htmlFor="creditLimit">Limite de Crédito (R$) *</Label>
+                <Input
+                  id="creditLimit"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={formData.creditLimit}
+                  onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="customDiscount">Desconto (%) *</Label>
+                <Input
+                  id="customDiscount"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={formData.customDiscount}
+                  onChange={(e) => setFormData({ ...formData, customDiscount: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div>
+                <Label htmlFor="paymentTerms">Prazo (dias) *</Label>
+                <Input
+                  id="paymentTerms"
+                  type="number"
+                  min="0"
+                  value={formData.paymentTerms}
+                  onChange={(e) => setFormData({ ...formData, paymentTerms: e.target.value })}
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Installment Options */}
+            <div className="space-y-4 border-t pt-4">
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="allowInstallments"
+                  checked={formData.allowInstallments}
+                  onChange={(e) => setFormData({ ...formData, allowInstallments: e.target.checked })}
+                  className="w-4 h-4 rounded border-gray-300"
+                />
+                <Label htmlFor="allowInstallments" className="cursor-pointer font-medium">
+                  Permitir parcelamento de boletos
+                </Label>
+              </div>
+
+              {formData.allowInstallments && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4 space-y-3">
+                  <Label className="text-sm font-medium text-green-900">Opções de parcelamento disponíveis:</Label>
+                  
+                  <div className="space-y-2">
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="installment-2x"
+                        checked={formData.installmentOptions.includes('2x')}
+                        onChange={(e) => {
+                          const options = e.target.checked
+                            ? [...formData.installmentOptions, '2x']
+                            : formData.installmentOptions.filter(o => o !== '2x')
+                          setFormData({ ...formData, installmentOptions: options })
+                        }}
+                        className="w-4 h-4 rounded border-gray-300"
+                      />
+                      <Label htmlFor="installment-2x" className="cursor-pointer text-sm">
+                        2 parcelas (metade em 7 dias, metade em 14 dias)
+                      </Label>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="checkbox"
+                        id="installment-4x"
+                        checked={formData.installmentOptions.includes('4x')}
+                        onChange={(e) => {
+                          const options = e.target.checked
+                            ? [...formData.installmentOptions, '4x']
+                            : formData.installmentOptions.filter(o => o !== '4x')
+                          setFormData({ ...formData, installmentOptions: options })
+                        }}
+                        className="w-4 h-4 rounded border-gray-300"
+                      />
+                      <Label htmlFor="installment-4x" className="cursor-pointer text-sm">
+                        4 parcelas (pagamentos em 7, 14, 21 e 28 dias)
+                      </Label>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-green-800 mt-2">
+                    ℹ️ O cliente poderá escolher uma dessas opções ao finalizar o pedido
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div>
+              <Label htmlFor="password">
+                Senha de Acesso {editingCustomer ? '(deixe em branco para não alterar)' : '*'}
+              </Label>
+              <Input
+                id="password"
+                type="password"
+                value={formData.password}
+                onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                required={!editingCustomer}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setIsDialogOpen(false)}
+                disabled={isSubmitting}
+              >
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                className="bg-red-600 hover:bg-red-700"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? 'Salvando...' : 'Salvar Cliente'}
+              </Button>
+            </div>
+          </form>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}

@@ -1,0 +1,574 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { Button } from '@/components/ui/button';
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { toast } from 'sonner';
+import {
+  MessageCircle,
+  Phone,
+  CheckCircle2,
+  XCircle,
+  Trash2,
+  RefreshCw,
+  Plus,
+  AlertCircle,
+  Home,
+  Copy,
+  ArrowLeft,
+} from 'lucide-react';
+import { useSession } from 'next-auth/react';
+
+interface Customer {
+  id: string;
+  name: string;
+  phone: string;
+  email: string | null;
+  manuallyUnblocked?: boolean;
+}
+
+interface Communication {
+  id: string;
+  customerId: string;
+  customer: Customer;
+  type: string;
+  description: string;
+  priority: string;
+  status: string;
+  amount: number | null;
+  createdAt: string;
+  updatedAt: string;
+  sentAt: string | null;
+  sentBy: string | null;
+}
+
+interface GroupedCommunications {
+  OVERDUE_BOLETO: Communication[];
+  INACTIVE_CLIENT: Communication[];
+  ORDER_FOLLOWUP: Communication[];
+  CUSTOM: Communication[];
+}
+
+export default function WhatsAppChecklistPage() {
+  const router = useRouter();
+  const { data: session } = useSession() || {};
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [communications, setcommunications] = useState<GroupedCommunications>({
+    OVERDUE_BOLETO: [],
+    INACTIVE_CLIENT: [],
+    ORDER_FOLLOWUP: [],
+    CUSTOM: [],
+  });
+  const [summary, setSummary] = useState({
+    overdueBoletos: 0,
+    inactiveClients: 0,
+    orderFollowup: 0,
+    custom: 0,
+  });
+
+  // Estado para adicionar comunicação personalizada
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [newComm, setNewComm] = useState({
+    customerId: '',
+    description: '',
+    priority: 'MEDIUM',
+  });
+
+  useEffect(() => {
+    if (session?.user?.userType !== 'ADMIN') {
+      router.push('/admin');
+      return;
+    }
+    fetchChecklist();
+    fetchCustomers();
+  }, [session]);
+
+  const fetchChecklist = async () => {
+    try {
+      setLoading(true);
+      console.log('[WHATSAPP_PAGE] Buscando checklist...');
+
+      const response = await fetch('/api/admin/whatsapp/checklist');
+      if (!response.ok) {
+        throw new Error('Erro ao buscar checklist');
+      }
+
+      const result = await response.json();
+      console.log('[WHATSAPP_PAGE] Checklist recebido:', result.data.summary);
+
+      setcommunications(result.data.grouped);
+      setSummary(result.data.summary);
+      toast.success('Checklist atualizado com sucesso!');
+    } catch (error: any) {
+      console.error('[WHATSAPP_PAGE] Erro ao buscar checklist:', error);
+      toast.error('Erro ao carregar checklist: ' + error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const fetchCustomers = async () => {
+    try {
+      const response = await fetch('/api/customers');
+      if (response.ok) {
+        const data = await response.json();
+        // A API retorna array diretamente, não {customers: [...]}
+        setCustomers(Array.isArray(data) ? data : []);
+        console.log('[WHATSAPP_PAGE] Clientes carregados:', Array.isArray(data) ? data.length : 0);
+      }
+    } catch (error) {
+      console.error('[WHATSAPP_PAGE] Erro ao buscar clientes:', error);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await fetchChecklist();
+    setRefreshing(false);
+  };
+
+  const handleMarkAsSent = async (commId: string) => {
+    try {
+      console.log(`[WHATSAPP_PAGE] Marcando comunicação ${commId} como enviada...`);
+
+      const response = await fetch(`/api/admin/whatsapp/checklist/${commId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'SENT' }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Erro ao marcar como enviado');
+      }
+
+      toast.success('✅ Marcado como enviado!');
+      await fetchChecklist(); // Atualizar lista
+    } catch (error: any) {
+      console.error('[WHATSAPP_PAGE] Erro ao marcar como enviado:', error);
+      toast.error('Erro: ' + error.message);
+    }
+  };
+
+  const handleIgnore = async (commId: string) => {
+    try {
+      console.log(`[WHATSAPP_PAGE] Ignorando comunicação ${commId}...`);
+
+      const response = await fetch(`/api/admin/whatsapp/checklist/${commId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'IGNORED' }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Erro ao ignorar');
+      }
+
+      toast.success('⛔ Comunicação ignorada');
+      await fetchChecklist();
+    } catch (error: any) {
+      console.error('[WHATSAPP_PAGE] Erro ao ignorar:', error);
+      toast.error('Erro: ' + error.message);
+    }
+  };
+
+  const handleDelete = async (commId: string) => {
+    if (!confirm('Deseja realmente remover esta comunicação da lista?')) {
+      return;
+    }
+
+    try {
+      console.log(`[WHATSAPP_PAGE] Removendo comunicação ${commId}...`);
+
+      const response = await fetch(`/api/admin/whatsapp/checklist/${commId}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        throw new Error('Erro ao remover');
+      }
+
+      toast.success('🗑️ Comunicação removida');
+      await fetchChecklist();
+    } catch (error: any) {
+      console.error('[WHATSAPP_PAGE] Erro ao remover:', error);
+      toast.error('Erro: ' + error.message);
+    }
+  };
+
+  const handleAddCustom = async () => {
+    if (!newComm.customerId || !newComm.description) {
+      toast.error('Preencha todos os campos!');
+      return;
+    }
+
+    try {
+      console.log('[WHATSAPP_PAGE] Adicionando comunicação personalizada...');
+
+      const response = await fetch('/api/admin/whatsapp/checklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newComm),
+      });
+
+      if (!response.ok) {
+        throw new Error('Erro ao adicionar comunicação');
+      }
+
+      toast.success('✅ Comunicação adicionada!');
+      setShowAddDialog(false);
+      setNewComm({ customerId: '', description: '', priority: 'MEDIUM' });
+      await fetchChecklist();
+    } catch (error: any) {
+      console.error('[WHATSAPP_PAGE] Erro ao adicionar:', error);
+      toast.error('Erro: ' + error.message);
+    }
+  };
+
+  const copyPhone = (phone: string) => {
+    navigator.clipboard.writeText(phone);
+    toast.success('📋 Telefone copiado!');
+  };
+
+  const getPriorityBadge = (priority: string) => {
+    const variants: Record<string, { color: string; label: string }> = {
+      HIGH: { color: 'bg-red-500 text-white', label: '🔴 Alta' },
+      MEDIUM: { color: 'bg-yellow-500 text-black', label: '🟡 Média' },
+      LOW: { color: 'bg-green-500 text-white', label: '🟢 Baixa' },
+    };
+
+    const variant = variants[priority] || variants.MEDIUM;
+    return (
+      <Badge className={variant.color}>
+        {variant.label}
+      </Badge>
+    );
+  };
+
+  const getTypeName = (type: string) => {
+    const names: Record<string, string> = {
+      OVERDUE_BOLETO: '💳 Boletos Atrasados',
+      INACTIVE_CLIENT: '😴 Clientes Inativos',
+      ORDER_FOLLOWUP: '📦 Follow-up de Pedidos',
+      CUSTOM: '✏️ Personalizadas',
+    };
+    return names[type] || type;
+  };
+
+  const renderCommunicationCard = (comm: Communication) => (
+    <Card key={comm.id} className="mb-4 border-l-4 border-l-blue-500">
+      <CardContent className="pt-6">
+        <div className="space-y-3">
+          {/* Cabeçalho com nome e prioridade */}
+          <div className="flex justify-between items-start">
+            <div className="flex-1">
+              <h3 className="font-bold text-lg">{comm.customer.name}</h3>
+              {comm.customer.manuallyUnblocked && (
+                <Badge className="bg-green-100 text-green-800 mt-1">
+                  🔓 Liberado Manualmente
+                </Badge>
+              )}
+            </div>
+            {getPriorityBadge(comm.priority)}
+          </div>
+
+          {/* Telefone com botão de copiar */}
+          <div className="flex items-center gap-2 bg-gray-100 p-3 rounded">
+            <Phone className="h-5 w-5 text-blue-600" />
+            <span className="font-mono font-bold text-lg flex-1">
+              {comm.customer.phone}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => copyPhone(comm.customer.phone)}
+            >
+              <Copy className="h-4 w-4" />
+            </Button>
+          </div>
+
+          {/* Descrição/Motivo */}
+          <div className="bg-yellow-50 p-3 rounded border border-yellow-200">
+            <p className="text-sm font-medium text-gray-700">
+              <AlertCircle className="inline h-4 w-4 mr-1 text-yellow-600" />
+              {comm.description}
+            </p>
+          </div>
+
+          {/* Valor (se aplicável) */}
+          {comm.amount && (
+            <div className="bg-red-50 p-2 rounded border border-red-200">
+              <p className="text-sm font-bold text-red-700">
+                💰 Valor: R$ {comm.amount.toFixed(2)}
+              </p>
+            </div>
+          )}
+
+          {/* Botões de ação */}
+          <div className="flex gap-2 pt-2">
+            <Button
+              onClick={() => handleMarkAsSent(comm.id)}
+              className="flex-1 bg-green-600 hover:bg-green-700"
+            >
+              <CheckCircle2 className="h-4 w-4 mr-2" />
+              Enviado
+            </Button>
+            <Button
+              onClick={() => handleIgnore(comm.id)}
+              variant="outline"
+              className="border-orange-500 text-orange-600 hover:bg-orange-50"
+            >
+              <XCircle className="h-4 w-4 mr-2" />
+              Ignorar
+            </Button>
+            <Button
+              onClick={() => handleDelete(comm.id)}
+              variant="destructive"
+              size="icon"
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+
+  const renderSection = (type: keyof GroupedCommunications, items: Communication[]) => {
+    if (items.length === 0) return null;
+
+    return (
+      <div className="mb-8">
+        <h2 className="text-2xl font-bold mb-4 flex items-center gap-2">
+          {getTypeName(type)}
+          <Badge variant="outline" className="text-lg">
+            {items.length}
+          </Badge>
+        </h2>
+        {items.map(renderCommunicationCard)}
+      </div>
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="container mx-auto p-6">
+        <Card>
+          <CardContent className="p-12 text-center">
+            <RefreshCw className="h-12 w-12 animate-spin mx-auto text-blue-600 mb-4" />
+            <p className="text-lg">Carregando checklist...</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  const totalPending =
+    summary.overdueBoletos +
+    summary.inactiveClients +
+    summary.orderFollowup +
+    summary.custom;
+
+  return (
+    <div className="container mx-auto p-6 max-w-6xl">
+      {/* Cabeçalho */}
+      <div className="mb-6">
+        <div className="flex items-center gap-4 mb-4">
+          <Button
+            variant="outline"
+            onClick={() => router.push('/admin')}
+            className="flex items-center gap-2"
+          >
+            <Home className="h-4 w-4" />
+            Página Inicial
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => router.back()}
+            className="flex items-center gap-2"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Voltar
+          </Button>
+        </div>
+
+        <Card className="bg-gradient-to-r from-green-500 to-blue-600 text-white">
+          <CardHeader>
+            <CardTitle className="text-3xl flex items-center gap-3">
+              <MessageCircle className="h-8 w-8" />
+              Checklist de WhatsApp
+            </CardTitle>
+            <CardDescription className="text-white/90 text-lg">
+              Organize as comunicações que precisam ser enviadas manualmente pelo celular
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+
+      {/* Resumo e ações */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>📊 Resumo</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              <p className="text-3xl font-bold text-blue-600">{totalPending}</p>
+              <p className="text-sm text-gray-600">comunicações pendentes</p>
+              <div className="mt-4 space-y-1 text-sm">
+                <p>💳 Boletos atrasados: <strong>{summary.overdueBoletos}</strong></p>
+                <p>😴 Clientes inativos: <strong>{summary.inactiveClients}</strong></p>
+                <p>📦 Follow-up: <strong>{summary.orderFollowup}</strong></p>
+                <p>✏️ Personalizadas: <strong>{summary.custom}</strong></p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>🔧 Ações</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <Button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="w-full bg-blue-600 hover:bg-blue-700"
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${refreshing ? 'animate-spin' : ''}`} />
+              {refreshing ? 'Atualizando...' : 'Atualizar Lista'}
+            </Button>
+            <Button
+              onClick={() => setShowAddDialog(true)}
+              className="w-full bg-purple-600 hover:bg-purple-700"
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Adicionar Comunicação Personalizada
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Lista de comunicações por categoria */}
+      {totalPending === 0 ? (
+        <Card>
+          <CardContent className="p-12 text-center">
+            <CheckCircle2 className="h-16 w-16 mx-auto text-green-500 mb-4" />
+            <h3 className="text-2xl font-bold mb-2">🎉 Tudo em dia!</h3>
+            <p className="text-gray-600">Não há comunicações pendentes no momento.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div>
+          {renderSection('OVERDUE_BOLETO', communications.OVERDUE_BOLETO)}
+          {renderSection('INACTIVE_CLIENT', communications.INACTIVE_CLIENT)}
+          {renderSection('ORDER_FOLLOWUP', communications.ORDER_FOLLOWUP)}
+          {renderSection('CUSTOM', communications.CUSTOM)}
+        </div>
+      )}
+
+      {/* Dialog para adicionar comunicação personalizada */}
+      <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>✏️ Adicionar Comunicação Personalizada</DialogTitle>
+            <DialogDescription>
+              Adicione uma comunicação específica para um cliente
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <Label>Cliente</Label>
+              <Select
+                value={newComm.customerId}
+                onValueChange={(value) =>
+                  setNewComm({ ...newComm, customerId: value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Selecione um cliente" />
+                </SelectTrigger>
+                <SelectContent>
+                  {customers.map((customer) => (
+                    <SelectItem key={customer.id} value={customer.id}>
+                      {customer.name} - {customer.phone}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <Label>Descrição/Motivo</Label>
+              <Textarea
+                placeholder="Ex: Oferecer desconto especial, Avisar sobre promoção, etc."
+                value={newComm.description}
+                onChange={(e) =>
+                  setNewComm({ ...newComm, description: e.target.value })
+                }
+                rows={3}
+              />
+            </div>
+
+            <div>
+              <Label>Prioridade</Label>
+              <Select
+                value={newComm.priority}
+                onValueChange={(value) =>
+                  setNewComm({ ...newComm, priority: value })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="HIGH">🔴 Alta</SelectItem>
+                  <SelectItem value="MEDIUM">🟡 Média</SelectItem>
+                  <SelectItem value="LOW">🟢 Baixa</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowAddDialog(false)}>
+              Cancelar
+            </Button>
+            <Button onClick={handleAddCustom} className="bg-purple-600">
+              <Plus className="h-4 w-4 mr-2" />
+              Adicionar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

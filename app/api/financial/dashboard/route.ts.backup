@@ -1,0 +1,564 @@
+export const dynamic = 'force-dynamic';
+
+
+import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth-options";
+import { prisma } from "@/lib/db";
+import { format } from "date-fns";
+import { ptBR } from "date-fns/locale";
+
+// GET - Dashboard financeiro consolidado
+export async function GET(req: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+    
+    if (!session || (session.user as any)?.userType !== "ADMIN") {
+      return NextResponse.json(
+        { error: "Não autorizado" },
+        { status: 401 }
+      );
+    }
+
+    const { searchParams } = new URL(req.url);
+    const startDate = searchParams.get("startDate");
+    const endDate = searchParams.get("endDate");
+
+    // Definir período padrão (mês atual)
+    const start = startDate ? new Date(startDate) : new Date(new Date().setDate(1));
+    const end = endDate ? new Date(endDate) : new Date();
+
+    // 1. Buscar todas as contas bancárias com saldos
+    const bankAccounts = await prisma.bankAccount.findMany({
+      where: { isActive: true },
+      orderBy: { name: "asc" }
+    });
+
+    const totalBalance = bankAccounts.reduce((sum: number, acc: any) => sum + acc.balance, 0);
+
+    // 2. Buscar despesas por categoria (TODAS - pagas e pendentes) no período
+    // 🔒 CRÍTICO: Excluir despesas que são de compras (Purchase !== null) para evitar duplicação
+    const expensesByCategory = await prisma.expense.groupBy({
+      by: ["categoryId"],
+      where: {
+        Purchase: null, // 🔑 Apenas despesas normais (não ligadas a compras)
+        OR: [
+          {
+            // Despesas pagas no período
+            paymentDate: {
+              gte: start,
+              lte: end
+            },
+            status: "PAID"
+          },
+          {
+            // Despesas pendentes com vencimento no período
+            dueDate: {
+              gte: start,
+              lte: end
+            },
+            status: "PENDING"
+          }
+        ]
+      },
+      _sum: {
+        amount: true,
+        feeAmount: true
+      }
+    });
+
+    // 2.1. Buscar TAMBÉM despesas de CARTÃO DE CRÉDITO por categoria
+    // 🔧 CORREÇÃO: Filtrar por purchaseDate (data de competência - quando a despesa foi realizada)
+    const creditCardExpensesByCategory = await prisma.creditCardExpense.groupBy({
+      by: ["categoryId"],
+      where: {
+        purchaseDate: {
+          gte: start,
+          lte: end
+        }
+      },
+      _sum: {
+        amount: true
+      }
+    });
+
+    // 2.2. Buscar APENAS COMPRAS SEM EXPENSE VINCULADA (para não duplicar com despesas)
+    // 🔧 CORREÇÃO: Compras COM expense já estão sendo contadas em expensesByCategory
+    // 🔧 Aqui buscamos APENAS compras que NÃO têm expense (ex: compras de cartão de crédito antigas)
+    const purchases = await prisma.purchase.findMany({
+      where: {
+        customerId: null, // 🔑 Apenas compras da fábrica (admin)
+        purchaseDate: {
+          gte: start,
+          lte: end
+        },
+        expenseId: null // 🔑 APENAS compras SEM expense (para não duplicar!)
+      },
+      include: {
+        Supplier: {
+          select: {
+            name: true
+          }
+        }
+      }
+    });
+
+    console.log("🔍 [DASHBOARD] Compras SEM expense vinculada:", purchases.length);
+
+    // Agrupar compras por categoria (todas serão "sem-categoria" porque não têm expense)
+    const purchasesByCategory = new Map<string, number>();
+    purchases.forEach((purchase: any) => {
+      // Compras sem expense vão para "sem-categoria"
+      const categoryId = "sem-categoria";
+      const current = purchasesByCategory.get(categoryId) || 0;
+      purchasesByCategory.set(categoryId, current + purchase.totalAmount);
+    });
+
+    // Buscar nomes de TODAS as categorias (despesas normais + cartão)
+    const expenseCategoryIds = [
+      ...expensesByCategory.map((e: any) => e.categoryId),
+      ...creditCardExpensesByCategory.map((e: any) => e.categoryId)
+    ]
+      .filter((id): id is string => id !== null) // remove null e garante tipo string
+      .filter((id, index, self) => self.indexOf(id) === index); // remove duplicados
+
+    // Buscar categorias de compras separadamente
+    const purchaseCategoryIds = Array.from(purchasesByCategory.keys())
+      .filter((id): id is string => id !== "sem-categoria")
+      .filter((id, index, self) => self.indexOf(id) === index);
+
+    const allCategoryIds = [...expenseCategoryIds, ...purchaseCategoryIds]
+      .filter((id, index, self) => self.indexOf(id) === index);
+
+    const categories = await prisma.expenseCategory.findMany({
+      where: {
+        id: {
+          in: allCategoryIds
+        }
+      }
+    });
+
+    // Criar um mapa para somar APENAS despesas normais + cartão (SEM COMPRAS)
+    const expenseCategoryMap = new Map<string, { categoryId: string; categoryName: string; categoryColor: string; amount: number }>();
+
+    // Adicionar despesas normais (incluindo feeAmount)
+    expensesByCategory.forEach((exp: any) => {
+      if (!exp.categoryId) return;
+      
+      const category = categories.find((c: any) => c.id === exp.categoryId);
+      const key = exp.categoryId;
+      const existing = expenseCategoryMap.get(key);
+      const totalAmount = (exp._sum.amount || 0) + (exp._sum.feeAmount || 0);
+      
+      if (existing) {
+        existing.amount += totalAmount;
+      } else {
+        expenseCategoryMap.set(key, {
+          categoryId: exp.categoryId,
+          categoryName: category?.name || "Outros",
+          categoryColor: category?.color || "#6B7280",
+          amount: totalAmount
+        });
+      }
+    });
+
+    // Adicionar despesas de CARTÃO DE CRÉDITO
+    creditCardExpensesByCategory.forEach((exp: any) => {
+      if (!exp.categoryId) return;
+      
+      const category = categories.find((c: any) => c.id === exp.categoryId);
+      const key = exp.categoryId;
+      const existing = expenseCategoryMap.get(key);
+      
+      if (existing) {
+        existing.amount += exp._sum.amount || 0;
+      } else {
+        expenseCategoryMap.set(key, {
+          categoryId: exp.categoryId,
+          categoryName: category?.name || "Cartão de Crédito",
+          categoryColor: category?.color || "#6B7280",
+          amount: exp._sum.amount || 0
+        });
+      }
+    });
+
+    // Criar um mapa separado APENAS para COMPRAS
+    const purchaseCategoryMap = new Map<string, { categoryId: string; categoryName: string; categoryColor: string; amount: number }>();
+
+    purchasesByCategory.forEach((amount, categoryId) => {
+      if (categoryId === "sem-categoria") {
+        purchaseCategoryMap.set("sem-categoria", {
+          categoryId: "sem-categoria",
+          categoryName: "Compras sem Categoria",
+          categoryColor: "#9CA3AF",
+          amount: amount
+        });
+      } else {
+        const category = categories.find((c: any) => c.id === categoryId);
+        purchaseCategoryMap.set(categoryId, {
+          categoryId: categoryId,
+          categoryName: category?.name || "Compras",
+          categoryColor: category?.color || "#9CA3AF",
+          amount: amount
+        });
+      }
+    });
+
+    const expensesByCategoryWithNames = Array.from(expenseCategoryMap.values());
+    const purchasesByCategoryWithNames = Array.from(purchaseCategoryMap.values());
+
+    // 3. Total de despesas no período (despesas normais + cartão - pagas e pendentes)
+    const totalExpensesInPeriod = expensesByCategoryWithNames.reduce(
+      (sum, cat) => sum + cat.amount,
+      0
+    );
+
+    // 3.1. Total de compras no período (para incluir no saldo projetado)
+    const totalPurchasesInPeriod = purchasesByCategoryWithNames.reduce(
+      (sum, cat) => sum + cat.amount,
+      0
+    );
+
+    console.log("🔍 [DASHBOARD] Total de despesas no período:", totalExpensesInPeriod);
+    console.log("🔍 [DASHBOARD] Total de compras no período:", totalPurchasesInPeriod);
+
+    // 4. Total de despesas pendentes
+    const pendingExpenses = await prisma.expense.findMany({
+      where: {
+        status: "PENDING"
+      },
+      include: {
+        Category: {
+          select: {
+            name: true,
+            color: true
+          }
+        }
+      },
+      orderBy: { dueDate: "asc" },
+      take: 30 // Próximas 30 despesas a vencer
+    });
+
+    // 4.1.5 Buscar faturas de cartão de crédito pendentes (não pagas)
+    const pendingCreditCardInvoices = await prisma.creditCardInvoice.findMany({
+      where: {
+        status: {
+          in: ["OPEN", "CLOSED", "OVERDUE"]
+        }
+      },
+      include: {
+        CreditCard: {
+          select: {
+            name: true,
+            color: true
+          }
+        }
+      },
+      orderBy: { dueDate: "asc" }
+    });
+
+    // Transformar faturas em formato compatível com despesas
+    const creditCardInvoicesAsExpenses = pendingCreditCardInvoices.map((invoice: any) => {
+      // Converter data para string no formato YYYY-MM-DD (sem hora) para evitar problemas de timezone
+      // Pegar a data do banco e formatar apenas a parte da data
+      const dueDateObj = new Date(invoice.dueDate);
+      const year = dueDateObj.getUTCFullYear();
+      const month = String(dueDateObj.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(dueDateObj.getUTCDate()).padStart(2, '0');
+      const dueDateFormatted = `${year}-${month}-${day}T00:00:00.000Z`;
+      
+      return {
+        id: invoice.id,
+        description: `Fatura ${invoice.CreditCard.name} - ${format(new Date(invoice.referenceMonth), "MMM/yyyy", { locale: ptBR })}`,
+        amount: invoice.totalAmount,
+        dueDate: dueDateFormatted,
+        Category: {
+          name: "Cartão de Crédito",
+          color: invoice.CreditCard.color || "#8B5CF6"
+        }
+      };
+    });
+
+    // Combinar despesas normais com faturas de cartão
+    const allPendingExpenses = [...pendingExpenses, ...creditCardInvoicesAsExpenses]
+      .sort((a, b) => new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime())
+      .slice(0, 30); // Limitar a 30 itens
+
+    // 4.0. Buscar contas a receber pendentes (próximos 30 dias)
+    const thirtyDaysFromNow = new Date();
+    thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+    
+    const pendingReceivables = await prisma.receivable.findMany({
+      where: {
+        status: "PENDING",
+        dueDate: {
+          lte: thirtyDaysFromNow
+        }
+      },
+      include: {
+        Customer: {
+          select: {
+            name: true,
+            phone: true
+          }
+        }
+      },
+      orderBy: { dueDate: "asc" },
+      take: 30 // Próximos 30 recebimentos a vencer
+    });
+
+    let totalPendingExpenses = pendingExpenses.reduce(
+      (sum: number, exp: any) => sum + exp.amount + (exp.feeAmount || 0),
+      0
+    );
+
+    // 4.1. Adicionar despesas de cartão de crédito com fatura NÃO PAGA (OPEN, CLOSED, OVERDUE)
+    const pendingCreditCardExpenses = await prisma.creditCardExpense.aggregate({
+      where: {
+        OR: [
+          {
+            // Despesas em faturas abertas, fechadas ou vencidas (não pagas)
+            Invoice: {
+              status: {
+                in: ["OPEN", "CLOSED", "OVERDUE"]
+              }
+            }
+          },
+          {
+            // Despesas sem fatura atribuída ainda (ainda na fatura aberta)
+            invoiceId: null
+          }
+        ]
+      },
+      _sum: {
+        amount: true
+      }
+    });
+
+    totalPendingExpenses += pendingCreditCardExpenses._sum.amount || 0;
+
+    // 4.2. Adicionar COMPRAS PENDENTES (não pagas) - APENAS DA FÁBRICA
+    // 🔧 CORREÇÃO: Excluir compras que JÁ têm expense vinculada (para não duplicar)
+    // 🔧 CORREÇÃO: Excluir compras de cartão de crédito (já estão nas CreditCardExpenses)
+    const pendingPurchases = await prisma.purchase.aggregate({
+      where: {
+        customerId: null, // 🔑 Apenas compras da fábrica (admin)
+        status: "PENDING",
+        expenseId: null, // 🔑 Apenas compras SEM expense (para não duplicar)
+        paymentMethod: { not: "CARTAO_CREDITO" } // 🔑 Excluir cartão (já contado acima)
+      },
+      _sum: {
+        totalAmount: true
+      }
+    });
+
+    totalPendingExpenses += pendingPurchases._sum.totalAmount || 0;
+    console.log("🔍 [DASHBOARD] Compras pendentes (sem expense, sem cartão):", pendingPurchases._sum.totalAmount || 0);
+
+    // 5. Despesas vencidas
+    const overdueExpenses = await prisma.expense.count({
+      where: {
+        status: "PENDING",
+        dueDate: {
+          lt: new Date()
+        }
+      }
+    });
+
+    // 6. Receitas do período (pedidos)
+    const ordersIncome = await prisma.order.aggregate({
+      where: {
+        createdAt: {
+          gte: start,
+          lte: end
+        },
+        status: {
+          notIn: ["CANCELLED"]
+        }
+      },
+      _sum: {
+        total: true
+      }
+    });
+
+    const totalIncome = ordersIncome._sum.total || 0;
+
+    console.log("🔍 [DASHBOARD] Total de receita (pedidos) no período:", totalIncome);
+
+    // 7. Contas a receber pendentes
+    // 🔧 CORREÇÃO: Incluir BOLETOS pendentes (que são a principal fonte de recebíveis)
+    // 🔧 CORREÇÃO: Receivables SEM boletoId (para não duplicar com boletos)
+    
+    // 7.1 Receivables pendentes SEM boleto vinculado
+    const receivablesWithoutBoleto = await prisma.receivable.aggregate({
+      where: {
+        status: { in: ["PENDING", "OVERDUE"] },
+        boletoId: null // 🔑 Apenas receivables SEM boleto (para não duplicar)
+      },
+      _sum: {
+        amount: true
+      }
+    });
+    
+    // 7.2 Boletos pendentes (principal fonte de recebíveis)
+    const pendingBoletos = await prisma.boleto.aggregate({
+      where: {
+        status: { in: ["PENDING", "OVERDUE"] }
+      },
+      _sum: {
+        amount: true
+      }
+    });
+    
+    const totalReceivable = (receivablesWithoutBoleto._sum.amount || 0) + (pendingBoletos._sum.amount || 0);
+    
+    console.log("🟦 [DASHBOARD] A Receber - Receivables (sem boleto):", receivablesWithoutBoleto._sum.amount || 0);
+    console.log("🟦 [DASHBOARD] A Receber - Boletos pendentes:", pendingBoletos._sum.amount || 0);
+    console.log("🟦 [DASHBOARD] A Receber - TOTAL:", totalReceivable);
+
+    // 7.1. Receita Líquida (valores efetivamente recebidos)
+    const receivedIncome = await prisma.receivable.aggregate({
+      where: {
+        paymentDate: {
+          gte: start,
+          lte: end
+        },
+        status: "PAID"
+      },
+      _sum: {
+        amount: true
+      }
+    });
+
+    const totalReceivedIncome = receivedIncome?._sum?.amount || 0;
+
+    console.log("🔍 [DASHBOARD] Total de receita recebida no período:", totalReceivedIncome);
+
+    // 8. Transações recentes
+    const recentTransactions = await prisma.transaction.findMany({
+      include: {
+        BankAccount: {
+          select: {
+            name: true,
+            color: true
+          }
+        }
+      },
+      orderBy: { date: "desc" },
+      take: 15
+    });
+
+    // 9. Saldo projetado (saldo atual + contas a receber - contas a pagar)
+    const projectedBalance = totalBalance + totalReceivable - totalPendingExpenses;
+    
+    console.log("🟦 [DASHBOARD] Cálculo do Saldo Projetado:");
+    console.log("   Saldo Total nas Contas:", totalBalance);
+    console.log("   + Contas a Receber:", totalReceivable);
+    console.log("   - Contas a Pagar:", totalPendingExpenses);
+    console.log("   = Saldo Projetado:", projectedBalance);
+
+    // 10. Agrupar despesas por tipo (OPERATIONAL, PRODUCTS, RAW_MATERIALS)
+    const expensesByTypeMap = {
+      OPERATIONAL: 0,
+      PRODUCTS: 0,
+      RAW_MATERIALS: 0
+    };
+
+    // Somar despesas normais por tipo (TODAS - pagas e pendentes)
+    // 🔒 CRÍTICO: Excluir despesas de compras para evitar duplicação
+    const expensesByTypeQuery = await prisma.expense.groupBy({
+      by: ["expenseType"],
+      where: {
+        Purchase: null, // 🔑 Apenas despesas normais (não ligadas a compras)
+        OR: [
+          {
+            // Despesas pagas no período
+            paymentDate: {
+              gte: start,
+              lte: end
+            },
+            status: "PAID"
+          },
+          {
+            // Despesas pendentes com vencimento no período
+            dueDate: {
+              gte: start,
+              lte: end
+            },
+            status: "PENDING"
+          }
+        ]
+      },
+      _sum: {
+        amount: true,
+        feeAmount: true
+      }
+    });
+
+    expensesByTypeQuery.forEach((exp: any) => {
+      const type = exp.expenseType;
+      if (type in expensesByTypeMap && exp._sum) {
+        expensesByTypeMap[type as keyof typeof expensesByTypeMap] += 
+          (exp._sum.amount || 0) + (exp._sum.feeAmount || 0);
+      }
+    });
+
+    // Somar despesas de cartão por tipo
+    // 🔧 CORREÇÃO: Filtrar por Invoice.referenceMonth ao invés de purchaseDate
+    const creditCardExpensesByTypeQuery = await prisma.creditCardExpense.groupBy({
+      by: ["expenseType"],
+      where: {
+        Invoice: {
+          referenceMonth: {
+            gte: start,
+            lte: end
+          }
+        }
+      },
+      _sum: {
+        amount: true
+      }
+    });
+
+    creditCardExpensesByTypeQuery.forEach((exp: any) => {
+      const type = exp.expenseType;
+      if (type in expensesByTypeMap) {
+        expensesByTypeMap[type as keyof typeof expensesByTypeMap] += 
+          (exp._sum.amount || 0);
+      }
+    });
+
+    // Somar compras (sempre RAW_MATERIALS)
+    expensesByTypeMap.RAW_MATERIALS += purchasesByCategoryWithNames.reduce(
+      (sum, cat) => sum + cat.amount,
+      0
+    );
+
+    return NextResponse.json({
+      summary: {
+        totalBalance,
+        totalIncome,
+        totalReceivedIncome,
+        totalExpensesPaid: totalExpensesInPeriod,
+        totalPurchasesPaid: totalPurchasesInPeriod,
+        totalPendingExpenses,
+        totalReceivable,
+        projectedBalance,
+        overdueExpensesCount: overdueExpenses
+      },
+      expensesByType: expensesByTypeMap,
+      bankAccounts,
+      expensesByCategory: expensesByCategoryWithNames,
+      purchasesByCategory: purchasesByCategoryWithNames,
+      pendingExpenses: allPendingExpenses, // Inclui despesas normais + faturas de cartão
+      pendingReceivables: pendingReceivables,
+      recentTransactions
+    });
+  } catch (error) {
+    console.error("Erro ao buscar dashboard:", error);
+    return NextResponse.json(
+      { error: "Erro ao buscar dashboard" },
+      { status: 500 }
+    );
+  }
+}
