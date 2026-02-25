@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 
 /**
  * API Route para verificar boletos pendentes de um cliente específico

@@ -1,3 +1,4 @@
+export const dynamic = "force-dynamic";
 
 /**
  * ❌ DESABILITADO - Este CRON job foi substituído pela verificação automática no login do admin
