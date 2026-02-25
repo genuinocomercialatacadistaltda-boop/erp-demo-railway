@@ -11,15 +11,14 @@ COPY package.json ./
 # Install dependencies
 RUN npm install --legacy-peer-deps
 
-# Generate Prisma client
-COPY prisma ./prisma/
-RUN npx prisma generate
-
 # Rebuild the source code only when needed
 FROM base AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+# Generate Prisma client in builder stage (after all files are copied)
+RUN npx prisma generate
 
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
